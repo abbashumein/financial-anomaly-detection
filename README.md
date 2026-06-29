@@ -40,6 +40,35 @@ Reads 22 million rows of real SEC financial filings across 6 quarters (2024Q4–
 - App: Streamlit
 - Data Processing: Polars
 
+
+## 📁 Project Structure
+
+```bash
+financial-anomaly-detection/
+│
+├── app/
+│   ├── main.py
+│   ├── api/
+│   ├── services/
+│   ├── schemas/
+│
+├── model/
+│   ├── vae.py
+│   ├── inference.py
+│
+├── data/
+│
+├── training/
+│
+├── rag/
+│
+├── tests/
+│
+├── config/
+│
+└── README.md
+```
+
 ## How To Run
 ```bash
 git clone https://github.com/abbashumein/financial-anomaly-detection
