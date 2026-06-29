@@ -1,6 +1,18 @@
 # Financial Anomaly Detection System
 
-AI-powered fraud detection on real SEC EDGAR financial filings.
+This project is evolving from a research notebook into a production-grade AI system.
+
+Current stage:
+- VAE-based anomaly detection implemented
+- SEC EDGAR financial data pipeline working
+- Basic anomaly scoring completed
+
+Next stage:
+- FastAPI inference service
+- RAG-based explanation system
+- AI agent for multi-step fraud reasoning
+- Docker + deployment
+
 
 ## What It Does
 Reads 22 million rows of real SEC financial filings across 6 quarters (2024Q4–2026Q1), trains a Variational Autoencoder to learn normal financial behavior, and automatically flags companies with suspicious patterns — explaining each anomaly in plain English using RAG and LLaMA 3.3.
