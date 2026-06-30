@@ -47,7 +47,7 @@ class AnalyzeResponse(BaseModel):
 async def analyze(req: AnalyzeRequest):
     """Run the full VAE → RAG → LLM pipeline for a given company."""
     try:
-        result = analyze_company(req.company_id)          # returns dict from rag_agent
+        result = analyze_company(req.company_id, req.fiscal_quarter or "Q4", 0.5)          # returns dict from rag_agent
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -56,21 +56,21 @@ async def analyze(req: AnalyzeRequest):
         "ticker":         req.ticker,
         "fiscal_year":    req.fiscal_year,
         "fiscal_quarter": req.fiscal_quarter,
-        "anomaly_score":  result["anomaly_score"],
-        "is_anomaly":     int(result["is_anomaly"]),
-        "risk_level":     result["risk_level"],
-        "explanation":    result.get("explanation", ""),
-        "raw_metrics":    result.get("metrics", {}),
+        "anomaly_score":  result.get("score", 0.5),
+        "is_anomaly":     int(result.get("score", 0) > 0.5),
+        "risk_level":     result.get("risk_level", "UNKNOWN"),
+        "explanation":    result.get("final_report", ""),
+        "raw_metrics":    {},
     }
     pred_id = insert_prediction(record)
 
     return AnalyzeResponse(
         prediction_id=pred_id,
         company_id=req.company_id,
-        anomaly_score=result["anomaly_score"],
-        is_anomaly=result["is_anomaly"],
-        risk_level=result["risk_level"],
-        explanation=result.get("explanation", ""),
+        anomaly_score=result.get("score", 0.5),
+        is_anomaly=result.get("score", 0) > 0.5,
+        risk_level=result.get("risk_level", "UNKNOWN"),
+        explanation=result.get("final_report", ""),
     )
 
 @app.get("/predictions")
