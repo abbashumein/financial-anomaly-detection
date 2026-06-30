@@ -1,0 +1,150 @@
+
+<style>
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:1.5rem}
+.mcard{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:.85rem 1rem}
+.mcard .lbl{font-size:12px;color:var(--color-text-secondary);margin:0 0 4px}
+.mcard .val{font-size:22px;font-weight:500;margin:0;color:var(--color-text-primary)}
+.section{font-size:11px;font-weight:500;color:var(--color-text-secondary);letter-spacing:.06em;text-transform:uppercase;margin:1.4rem 0 .5rem}
+.card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1rem 1.25rem;margin-bottom:.75rem}
+.row{display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-bottom:0.5px solid var(--color-border-tertiary);font-size:13px}
+.row:last-child{border-bottom:none}
+.badge{font-size:11px;font-weight:500;padding:2px 8px;border-radius:20px;white-space:nowrap;flex-shrink:0;margin-top:1px}
+.done{background:#EAF3DE;color:#27500A}
+.fix{background:#FAEEDA;color:#633806}
+.todo{background:#FCEBEB;color:#791F1F}
+.item{flex:1;color:var(--color-text-primary);line-height:1.4}
+.note{font-size:12px;color:var(--color-text-secondary);margin-top:2px}
+.bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.bar-label{font-size:12px;color:var(--color-text-secondary);width:80px;flex-shrink:0}
+.bar-track{flex:1;background:var(--color-border-tertiary);border-radius:4px;height:8px}
+.bar-fill{height:8px;border-radius:4px}
+.bar-pct{font-size:12px;font-weight:500;width:36px;text-align:right}
+</style>
+
+<h2 class="sr-only">Anomaly detection project progress — how much is done vs still to build</h2>
+
+<div style="padding:.75rem 0 0">
+  <div class="grid4">
+    <div class="mcard"><p class="lbl">Total items</p><p class="val">16</p></div>
+    <div class="mcard"><p class="lbl">Already done</p><p class="val" style="color:#27500A">9</p></div>
+    <div class="mcard"><p class="lbl">Small fix needed</p><p class="val" style="color:#633806">2</p></div>
+    <div class="mcard"><p class="lbl">Still to add</p><p class="val" style="color:#791F1F">5</p></div>
+  </div>
+
+  <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1rem 1.25rem;margin-bottom:1rem">
+    <p class="section" style="margin-top:0">Overall progress</p>
+    <div class="bar-row">
+      <span class="bar-label">Done</span>
+      <div class="bar-track"><div class="bar-fill" style="width:56%;background:#639922"></div></div>
+      <span class="bar-pct" style="color:#27500A">56%</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-label">Fix needed</span>
+      <div class="bar-track"><div class="bar-fill" style="width:13%;background:#EF9F27"></div></div>
+      <span class="bar-pct" style="color:#633806">13%</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-label">Not built</span>
+      <div class="bar-track"><div class="bar-fill" style="width:31%;background:#E24B4A"></div></div>
+      <span class="bar-pct" style="color:#791F1F">31%</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="section" style="margin-top:0">Data & preprocessing — the foundation</p>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">Load all 4 SEC files (num, sub, tag, pre) with Polars<div class="note">3.7M+ rows from S3. Polars ETL is fast and clean.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">EDA — null checks, z-score outliers, date ranges, value stats<div class="note">Identified 49% sparsity, extreme value skew, 211k merged rows.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">Clean — dedup, fill nulls, parse dates, filter key tags<div class="note">13,077 financial tags filtered. Revenue, Assets, Liabilities, Income.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">Merge num + sub for company names and CIK identifiers<div class="note">211k rows with cik, name, period attached.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge fix">Fix needed</span>
+      <div class="item">Replace S3 reads with local file reads<div class="note">Change pl.read_csv("s3://...") to pl.read_csv("num.txt"). One line each file.</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="section" style="margin-top:0">Model — the core AI</p>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">Time-series extraction — group by CIK + tag<div class="note">500 sequences extracted. Correct grouping approach.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">Normalize + zero-pad sequences to length 20<div class="note">MinMaxScaler per sequence. (500, 20) array ready for VAE.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">VAE architecture — encoder, reparameterize, decoder<div class="note">Clean PyTorch. Correct ELBO loss (MSE + KL divergence).</div></div>
+    </div>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">Train VAE — 20 epochs, loss converged 89% (301 → 32)<div class="note">Adam optimizer. 5% anomaly rate (25/500). Working correctly.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">Anomaly scoring — reconstruction error, 95th percentile threshold<div class="note">Standard and defensible. Blue vs red plot shows divergence clearly.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge fix">Fix needed</span>
+      <div class="item">Remove .head(500) — train on full dataset<div class="note">Currently only 500 rows. Remove this one limit for a real portfolio.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge todo">Add this</span>
+      <div class="item">Save model weights — torch.save(model.state_dict(), 'vae_model.pt')<div class="note">Already in the pipeline code at the bottom. Just uncomment and run.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge todo">Add this</span>
+      <div class="item">Isolation Forest baseline comparison + AUROC score<div class="note">3 lines of sklearn. Gives you an answer when interviewers ask "why VAE?".</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="section" style="margin-top:0">RAG + explanation layer</p>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">RAG setup — FAISS vector store, HuggingFace embeddings<div class="note">langchain_huggingface + FAISS. Verified working. Tags indexed.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">explain_anomaly() function — similarity search per flagged company<div class="note">In your pipeline code. Retrieves context. Works end-to-end.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge todo">Add this</span>
+      <div class="item">Connect RAG context to an actual LLM (Gemini or OpenAI)<div class="note">Right now it returns the raw tag text. Add one LLM call to explain it in plain English.</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="section" style="margin-top:0">API, deployment & production</p>
+    <div class="row">
+      <span class="badge done">Done</span>
+      <div class="item">Streamlit app — app.py with model loading and anomaly UI<div class="note">Full app written. Loads model, shows original vs reconstructed, flags anomaly.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge todo">Add this</span>
+      <div class="item">FastAPI endpoint — POST /analyze returns JSON score + explanation<div class="note">Streamlit is good for demo. FastAPI is what gets you hired. Both together = perfect.</div></div>
+    </div>
+    <div class="row">
+      <span class="badge todo">Add this</span>
+      <div class="item">Docker + GitHub Actions CI<div class="note">Copy directly from your CDSS repo. Same pattern. 1 hour of work.</div></div>
+    </div>
+  </div>
+
+  <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:.85rem 1rem;margin-top:.5rem">
+    <p style="font-size:13px;color:var(--color-text-secondary);margin:0 0 6px;font-weight:500">What this product actually does (in one sentence)</p>
+    <p style="font-size:13px;color:var(--color-text-primary);margin:0;line-height:1.6">It reads thousands of real company financial filings, learns what "normal" looks like using a VAE neural network, automatically flags companies with unusual patterns (possible fraud, mergers, financial distress), and explains in plain English why each company was flagged.</p>
+  </div>
+</div>

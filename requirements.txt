@@ -1,0 +1,17 @@
+polars
+torch
+scikit-learn
+langchain
+langchain-community
+langchain-huggingface
+langchain-core
+faiss-cpu
+sentence-transformers
+groq
+langgraph
+langsmith
+plotly
+streamlit
+numpy
+pandas
+google-generativeai
