@@ -1,5 +1,10 @@
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+import os
+import pandas as pd
+from dotenv import load_dotenv
+load_dotenv()
+
+import chromadb
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 from groq import Groq
 from langgraph.graph import StateGraph, END
 from typing import TypedDict
@@ -14,27 +19,35 @@ class AnomalyState(TypedDict):
     explanation: str
     final_report: str
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-db = FAISS.load_local(settings.faiss_index_path, embeddings, allow_dangerous_deserialization=True)
+chroma_client = chromadb.PersistentClient(path="data/chromadb")
+
+ef = DefaultEmbeddingFunction()
+collection = chroma_client.get_or_create_collection(name="anomalies", embedding_function=ef)
+
+if collection.count() == 0:
+    print("Ingesting...")
+    df = pd.read_csv("data/anomaly_results.csv").dropna(subset=["company", "tag", "anomaly_score"]).head(500)
+    docs, metas, ids = [], [], []
+    for i, row in df.iterrows():
+        docs.append(f"Company: {row['company']} Metric: {row['tag']} Score: {row['anomaly_score']}")
+        metas.append({"company": str(row["company"]), "tag": str(row["tag"])})
+        ids.append(str(i))
+    collection.add(documents=docs, metadatas=metas, ids=ids)
+    print(f"Done - {len(docs)} records")
+
 groq_client = Groq(api_key=settings.groq_api_key)
 
 def assess_risk(state):
-    score = state["score"]
-    state["risk_level"] = "HIGH" if score > 0.5 else "MEDIUM" if score > 0.3 else "LOW"
+    state["risk_level"] = "HIGH" if state["score"] > 0.5 else "MEDIUM" if state["score"] > 0.3 else "LOW"
     return state
 
 def retrieve_context(state):
-    similar = db.similarity_search(state["company"] + " " + state["tag"], k=3)
-    state["similar_cases"] = "\n".join([d.page_content for d in similar])
+    results = collection.query(query_texts=[state["company"] + " " + state["tag"]], n_results=3)
+    state["similar_cases"] = "\n".join(results["documents"][0] if results["documents"] else [])
     return state
 
 def generate_explanation(state):
-    prompt = "You are a financial fraud analyst. Answer ONLY based on provided data.\n"
-    prompt += "Company: " + state["company"] + "\n"
-    prompt += "Metric: " + state["tag"] + "\n"
-    prompt += "Risk: " + state["risk_level"] + "\n"
-    prompt += "Similar cases: " + state["similar_cases"] + "\n"
-    prompt += "In 2 sentences explain what is suspicious and what an auditor should check."
+    prompt = f"Financial fraud analyst. Company: {state['company']} Metric: {state['tag']} Risk: {state['risk_level']} Similar: {state['similar_cases']} In 2 sentences explain what is suspicious."
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}]
@@ -43,7 +56,7 @@ def generate_explanation(state):
     return state
 
 def write_report(state):
-    state["final_report"] = "Company: " + state["company"] + " | Score: " + str(state["score"]) + " | Risk: " + state["risk_level"] + " | " + state["explanation"]
+    state["final_report"] = f"Company: {state['company']} | Score: {state['score']} | Risk: {state['risk_level']} | {state['explanation']}"
     return state
 
 graph = StateGraph(AnomalyState)
@@ -56,7 +69,6 @@ graph.add_edge("assess_risk", "retrieve_context")
 graph.add_edge("retrieve_context", "generate_explanation")
 graph.add_edge("generate_explanation", "write_report")
 graph.add_edge("write_report", END)
-
 agent = graph.compile()
 
 def analyze_company(company, tag, score):
