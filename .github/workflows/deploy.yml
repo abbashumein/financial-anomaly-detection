@@ -1,24 +1,35 @@
-name: Build and Push to ACR
+
+name: CI
 
 on:
+
   push:
+
     branches: [main, master]
 
 jobs:
+
   build:
+
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
 
-      - name: Login to ACR
-        uses: docker/login-action@v2
-        with:
-          registry: cafb7024917facr.azurecr.io
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
+      - uses: actions/checkout@v4
 
-      - name: Build and push
-        uses: docker/build-push-action@v4
+      - name: Set up Python
+
+        uses: actions/setup-python@v5
+
         with:
-          push: true
-          tags: cafb7024917facr.azurecr.io/financial-anomaly:latest
+
+          python-version: "3.11"
+
+      - name: Install dependencies
+
+        run: pip install -r requirements.txt
+
+      - name: Build Docker image
+
+        run: docker build -t anomaly-detection .
+
