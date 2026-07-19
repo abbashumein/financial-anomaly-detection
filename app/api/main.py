@@ -28,7 +28,8 @@ async def startup():
 # ---------- schemas ----------
 
 class AnalyzeRequest(BaseModel):
-    company_id: str = Field(..., example="0001318605")
+    company_id: str = Field(..., example="0001318605", description="SEC CIK number")
+    tag: str = Field(..., example="Assets", description="US-GAAP tag to investigate, e.g. Assets, Revenues, NetIncomeLoss")
     ticker: Optional[str] = Field(None, example="TSLA")
     fiscal_year: Optional[int] = Field(None, example=2023)
     fiscal_quarter: Optional[str] = Field(None, example="Q4")
@@ -45,30 +46,37 @@ class AnalyzeResponse(BaseModel):
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
-    """Run the full VAE → RAG → LLM pipeline for a given company."""
+    """Run the live VAE-scoring + agentic RAG pipeline for a given company/tag."""
     try:
-        result = analyze_company(req.company_id, req.fiscal_quarter or "Q4", 0.5)          # returns dict from rag_agent
+        result = analyze_company(req.company_id, req.tag, req.ticker)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    score = result.get("score")
+    raw = result.get("raw_score_data") or {}
+    # Prefer the VAE scorer's own is_anomaly flag (calibrated against the
+    # real p95 threshold); fall back to risk_level if scoring failed for
+    # some reason so the response never silently lies.
+    is_anomaly = raw.get("is_anomaly", result.get("risk_level") == "HIGH")
 
     record = {
         "company_id":     req.company_id,
         "ticker":         req.ticker,
         "fiscal_year":    req.fiscal_year,
         "fiscal_quarter": req.fiscal_quarter,
-        "anomaly_score":  result.get("score", 0.5),
-        "is_anomaly":     int(result.get("score", 0) > 0.5),
+        "anomaly_score":  score if score is not None else 0.0,
+        "is_anomaly":     int(is_anomaly),
         "risk_level":     result.get("risk_level", "UNKNOWN"),
         "explanation":    result.get("final_report", ""),
-        "raw_metrics":    {},
+        "raw_metrics":    raw,
     }
     pred_id = insert_prediction(record)
 
     return AnalyzeResponse(
         prediction_id=pred_id,
         company_id=req.company_id,
-        anomaly_score=result.get("score", 0.5),
-        is_anomaly=result.get("score", 0) > 0.5,
+        anomaly_score=score if score is not None else 0.0,
+        is_anomaly=is_anomaly,
         risk_level=result.get("risk_level", "UNKNOWN"),
         explanation=result.get("final_report", ""),
     )

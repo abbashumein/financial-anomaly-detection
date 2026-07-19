@@ -11,33 +11,36 @@
 
 ## What It Does
 
-Reads 22 million rows of real SEC EDGAR financial filings across 6 quarters (2024Q4 – 2026Q1), trains a Variational Autoencoder to learn what normal financial behavior looks like, then automatically flags companies whose patterns deviate — explaining each anomaly in plain English through a LangGraph multi-step agent backed by RAG and Llama 3.3.
+Trained a Variational Autoencoder offline on 22 million rows of real SEC EDGAR financial filings across 6 quarters (2024Q4 – 2026Q1) to learn what normal financial behavior looks like. The deployed API calls that trained model live: given a company's SEC CIK and a financial metric, it pulls that company's real current filing history from the EDGAR `companyfacts` API, runs it through the VAE, and hands the reconstruction-error score to a tool-calling agent (Llama 3.3 via Groq) that decides for itself whether to pull historical precedent, search for broader risk patterns, or conclude — instead of following a fixed step sequence.
+
+**Note on an earlier version:** an older revision of this README described a fixed 4-node LangGraph pipeline and FAISS-based retrieval. The current implementation uses a genuine agentic tool-calling loop (see `app/services/rag_agent.py`) and ChromaDB for retrieval — this doc has been updated to match what's actually deployed.
 
 ---
 
 ## Architecture
 
 ```
-SEC EDGAR (22M rows, 6 quarters)
+SEC EDGAR companyfacts API (live, per-request)
          │
          ▼
-   Polars ETL Pipeline
+  Sequence builder ── min-max scale + zero-pad to length 20
          │
          ▼
-  VAE (PyTorch) ──── learns "normal" financial patterns
+  VAE (PyTorch) ──── real forward pass, live reconstruction error
          │
          ▼
-  Anomaly Scoring ── reconstruction error > 95th percentile
+  Risk bucket ── calibrated against training-set percentiles (p90/p95)
          │
          ▼
-  LangGraph Agent (4 nodes)
-  ┌─────────────────────────────────────────┐
-  │  assess_risk → retrieve_context         │
-  │  → generate_explanation → write_report  │
-  └─────────────────────────────────────────┘
+  Tool-Calling Agent (Llama 3.3 via Groq)
+  ┌───────────────────────────────────────────────┐
+  │  agent decides which to call, in what order:  │
+  │  score_company_metric → retrieve_similar_cases │
+  │  → (optional) deep_search → conclude           │
+  └───────────────────────────────────────────────┘
          │
          ▼
-  RAG (FAISS + HuggingFace embeddings)
+  RAG (ChromaDB + default sentence-transformer embeddings)
          │
          ▼
   LLM (Llama 3.3 via Groq / Gemini)

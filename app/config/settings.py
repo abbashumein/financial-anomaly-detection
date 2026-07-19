@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    edgar_user_agent: str = os.getenv("EDGAR_USER_AGENT", "")
     langchain_api_key: str = os.getenv("LANGCHAIN_API_KEY", "")
     langchain_project: str = "financial-anomaly-detection"
     model_path: str = "models/vae_model.pt"
