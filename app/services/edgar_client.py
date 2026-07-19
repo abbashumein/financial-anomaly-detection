@@ -4,10 +4,19 @@ Live SEC EDGAR client.
 
 Replaces the offline bulk-file pipeline (num.txt/sub.txt/tag.txt from
 SEC's quarterly DERA datasets) that the training notebook used, with the
-free, no-key, real-time `companyfacts` API. Given a CIK and a US-GAAP tag,
-this pulls that company's actual disclosed history and reshapes it into
-the exact 20-length, min-max-scaled, zero-padded sequence format the VAE
-was trained on (see anomaly_detection.ipynb, Step 4).
+free, no-key, real-time `companyfacts` API.
+
+IMPORTANT - training/inference shape match:
+The training notebook only used ~6 quarters of bulk data (2024Q4-2026Q1).
+Its sample sequences are mostly SHORT and heavily zero-padded (e.g. one
+documented example has only 3 real values out of 20 slots) - they are
+NOT 20 real historical quarters. Pulling a company's full multi-year
+EDGAR history and filling all 20 slots with real values produces a
+sequence shape the VAE never saw in training, which made every company
+(regardless of actual anomalousness) score as HIGH risk during initial
+testing. To keep live inference shaped like training data, this module
+only pulls the most recent WINDOW_QUARTERS real values and lets the rest
+zero-pad, mirroring the training distribution.
 
 SEC requires a descriptive User-Agent on every request (no API key needed).
 Set EDGAR_USER_AGENT in your .env, e.g.:
@@ -19,7 +28,8 @@ from sklearn.preprocessing import MinMaxScaler
 
 from app.config.settings import settings
 
-MAX_LEN = 20  # must match VAE(seq_len=20)
+MAX_LEN = 20             # must match VAE(seq_len=20)
+WINDOW_QUARTERS = 6       # matches the training notebook's ~6-quarter bulk data window
 BASE_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
 
@@ -56,13 +66,14 @@ def fetch_company_facts(company_id: str) -> dict:
     return resp.json()
 
 
-def build_sequence(facts: dict, tag: str, max_len: int = MAX_LEN):
+def build_sequence(facts: dict, tag: str, max_len: int = MAX_LEN, window: int = WINDOW_QUARTERS):
     """
-    Mirrors the notebook's Step 4 exactly:
+    Shape-matched to training:
       - pull the tag's USD-unit values, sorted chronologically
-      - trim to the most recent `max_len` points
-      - min-max scale to [0, 1]
-      - zero-pad on the right if shorter than max_len
+      - keep only the most recent `window` points (default 6, matching the
+        training notebook's bulk data window) - NOT all `max_len` slots
+      - min-max scale those points to [0, 1]
+      - zero-pad the rest of the `max_len`-length array
 
     Returns (padded_array[float32, shape=(max_len,)], raw_values, dates, unit_used)
     """
@@ -90,7 +101,7 @@ def build_sequence(facts: dict, tag: str, max_len: int = MAX_LEN):
     if not ordered:
         raise EdgarLookupError(f"Tag '{tag}' has no dated values.")
 
-    recent = ordered[-max_len:]
+    recent = ordered[-window:]
     raw_values = [float(p["val"]) for p in recent]
     dates = [p["end"] for p in recent]
 
@@ -101,7 +112,7 @@ def build_sequence(facts: dict, tag: str, max_len: int = MAX_LEN):
         scaled = np.zeros(len(arr))
 
     pad_width = max_len - len(scaled)
-    padded = np.pad(scaled, (0, pad_width), "constant").astype("float32")
+    padded = np.pad(scaled, (0, max(pad_width, 0)), "constant").astype("float32")[:max_len]
 
     return padded, raw_values, dates, unit_key
 
