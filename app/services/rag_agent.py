@@ -65,6 +65,55 @@ def tool_score_company_metric(company_id: str, tag: str) -> dict:
     }
 
 
+# Common tags almost every SEC filer discloses - good defaults for a
+# broad "what's driving this" sweep. Any tag missing for a given
+# company is skipped, not treated as an error for the whole call.
+DEFAULT_METRIC_BASKET = [
+    "Assets",
+    "Liabilities",
+    "StockholdersEquity",
+    "Revenues",
+    "NetIncomeLoss",
+]
+
+
+def tool_get_anomalous_metrics(company_id: str, tags: list[str] = None) -> dict:
+    """
+    Runs the existing single-tag VAE scorer across several financial tags
+    for the same company and ranks them by reconstruction error, so the
+    agent can see WHICH metrics are driving the anomaly - not just that
+    "some metric" is anomalous. Reuses tool_score_company_metric as-is;
+    no new model, no new math, just repeated calls + sorting.
+    """
+    tags = tags or DEFAULT_METRIC_BASKET
+    checked = []
+    skipped = []
+
+    for tag in tags:
+        result = tool_score_company_metric(company_id, tag)
+        if "error" in result:
+            skipped.append({"tag": tag, "reason": result["error"]})
+            continue
+        checked.append(result)
+
+    # most anomalous first
+    checked.sort(key=lambda r: r["reconstruction_error"], reverse=True)
+
+    return {
+        "entity_name": checked[0]["entity_name"] if checked else None,
+        "ranked_metrics": [
+            {
+                "tag": r["tag"],
+                "reconstruction_error": r["reconstruction_error"],
+                "risk_level": r["risk_level"],
+                "is_anomaly": r["is_anomaly"],
+            }
+            for r in checked
+        ],
+        "skipped_tags": skipped,
+    }
+
+
 def tool_retrieve_similar_cases(company: str, tag: str, n: int = 3) -> str:
     results = collection.query(query_texts=[f"{company} {tag}"], n_results=n)
     docs = results["documents"][0] if results["documents"] else []
@@ -95,6 +144,27 @@ TOOLS = [
                     "tag": {"type": "string", "description": "US-GAAP tag, e.g. 'Assets', 'Revenues', 'NetIncomeLoss'"},
                 },
                 "required": ["company_id", "tag"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_anomalous_metrics",
+            "description": (
+                "After an initial score_company_metric call comes back MEDIUM or "
+                "HIGH, call this to check a basket of related financial metrics "
+                "(Assets, Liabilities, StockholdersEquity, Revenues, NetIncomeLoss) "
+                "for the same company and see which specific ones are driving the "
+                "anomaly. Use this to answer WHY a company is flagged, not just THAT "
+                "it is flagged."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_id": {"type": "string", "description": "SEC CIK number, e.g. '0001318605'"},
+                },
+                "required": ["company_id"],
             },
         },
     },
@@ -144,6 +214,7 @@ TOOLS = [
 
 DISPATCH = {
     "score_company_metric": lambda args: tool_score_company_metric(args["company_id"], args["tag"]),
+    "get_anomalous_metrics": lambda args: tool_get_anomalous_metrics(args["company_id"], args.get("tags")),
     "retrieve_similar_cases": lambda args: tool_retrieve_similar_cases(args["company"], args["tag"], args.get("n", 3)),
     "deep_search": lambda args: tool_deep_search(args["tag"]),
 }
@@ -157,6 +228,9 @@ for broader risk patterns. Decide which tools to call and in what order.
 Rules:
 - Always call score_company_metric first — you need a real score before
   reasoning about anything.
+- If that score is MEDIUM or HIGH, call get_anomalous_metrics next to see
+  WHICH specific financial metrics are driving the anomaly, before you
+  look for supporting evidence.
 - Use retrieve_similar_cases to check whether this pattern has precedent.
 - Only use deep_search if the score is MEDIUM or HIGH and you need more
   evidence before concluding.

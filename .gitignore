@@ -1,7 +1,10 @@
 .env
 *.pt
+!models/vae_model.pt
 *.parquet
 __pycache__/
 .ipynb_checkpoints/
 data/
-models/
+models/*
+!models/vae_model.pt
+.idea/
