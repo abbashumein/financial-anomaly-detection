@@ -21,6 +21,7 @@ import pandas as pd
 from app.config.settings import settings
 from app.services import edgar_client
 from app.services import vae_scorer
+from app.services import sec_filing_search
 
 MAX_AGENT_STEPS = 6
 
@@ -114,6 +115,42 @@ def tool_get_anomalous_metrics(company_id: str, tags: list[str] = None) -> dict:
     }
 
 
+def tool_get_sec_filing_context(company_id: str, tag: str) -> dict:
+    """
+    Finds a real SEC filing (10-K/10-Q) that discusses the anomalous
+    metric, and pulls the actual surrounding narrative text as evidence -
+    this is the RAG evidence-gathering step: turning "this tag looks
+    anomalous" into "here's what the company said about it."
+    """
+    search_term = sec_filing_search.TAG_TO_SEARCH_TERM.get(tag, tag)
+
+    try:
+        filings = sec_filing_search.search_filings(company_id, search_term)
+    except Exception as e:
+        return {"error": f"Filing search failed: {e}"}
+
+    if not filings:
+        return {"error": f"No filings found mentioning '{search_term}' for this company."}
+
+    top = filings[0]
+    try:
+        excerpt = sec_filing_search.fetch_excerpt(top["doc_url"], search_term)
+    except Exception as e:
+        excerpt = None
+        fetch_error = str(e)
+    else:
+        fetch_error = None
+
+    return {
+        "entity_name": top["entity_name"],
+        "form": top["form"],
+        "file_date": top["file_date"],
+        "source_url": top["doc_url"],
+        "search_term": search_term,
+        "excerpt": excerpt or f"(Could not extract excerpt: {fetch_error or 'term not found in document text'})",
+    }
+
+
 def tool_retrieve_similar_cases(company: str, tag: str, n: int = 3) -> str:
     results = collection.query(query_texts=[f"{company} {tag}"], n_results=n)
     docs = results["documents"][0] if results["documents"] else []
@@ -171,6 +208,27 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_sec_filing_context",
+            "description": (
+                "After get_anomalous_metrics identifies WHICH metric is driving "
+                "the anomaly, call this to find real SEC filing text discussing "
+                "that metric - actual evidence from the company's own 10-K/10-Q "
+                "narrative, not just a number. Use this to explain WHY, with a "
+                "real source you can cite."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_id": {"type": "string", "description": "SEC CIK number, e.g. '0001318605'"},
+                    "tag": {"type": "string", "description": "The anomalous metric tag, e.g. 'NetIncomeLoss'"},
+                },
+                "required": ["company_id", "tag"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "retrieve_similar_cases",
             "description": "Search the historical corpus for similar company/metric anomaly cases to give context for the score.",
             "parameters": {
@@ -215,6 +273,7 @@ TOOLS = [
 DISPATCH = {
     "score_company_metric": lambda args: tool_score_company_metric(args["company_id"], args["tag"]),
     "get_anomalous_metrics": lambda args: tool_get_anomalous_metrics(args["company_id"], args.get("tags")),
+    "get_sec_filing_context": lambda args: tool_get_sec_filing_context(args["company_id"], args["tag"]),
     "retrieve_similar_cases": lambda args: tool_retrieve_similar_cases(args["company"], args["tag"], args.get("n", 3)),
     "deep_search": lambda args: tool_deep_search(args["tag"]),
 }
@@ -231,6 +290,8 @@ Rules:
 - If that score is MEDIUM or HIGH, call get_anomalous_metrics next to see
   WHICH specific financial metrics are driving the anomaly, before you
   look for supporting evidence.
+- Once you know which metric is driving it, call get_sec_filing_context
+  to find real filing text explaining WHY - cite it in your conclusion.
 - Use retrieve_similar_cases to check whether this pattern has precedent.
 - Only use deep_search if the score is MEDIUM or HIGH and you need more
   evidence before concluding.

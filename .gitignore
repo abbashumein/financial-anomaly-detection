@@ -8,3 +8,4 @@ data/
 models/*
 !models/vae_model.pt
 .idea/
+*.zip
