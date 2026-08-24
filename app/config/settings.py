@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     model_path: str = "models/vae_model.pt"
     faiss_index_path: str = "models/faiss_index"
     results_csv_path: str = "data/anomaly_results.csv"
+    # If unset, the API runs without auth (fine for local dev). Set this
+    # in production/demo deployments to require the X-API-Key header.
+    api_key: str = os.getenv("API_KEY", "")
 
     class Config:
         env_file = ".env"

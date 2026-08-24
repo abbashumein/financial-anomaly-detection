@@ -27,6 +27,7 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 
 from app.config.settings import settings
+from app.services.cache import ttl_cache
 
 MAX_LEN = 20             # must match VAE(seq_len=20)
 WINDOW_QUARTERS = 6       # matches the training notebook's ~6-quarter bulk data window
@@ -56,6 +57,7 @@ def normalize_cik(company_id: str) -> str:
     return digits.zfill(10)
 
 
+@ttl_cache(seconds=900)  # 15 min - SEC filings don't change minute-to-minute
 def fetch_company_facts(company_id: str) -> dict:
     cik = normalize_cik(company_id)
     url = BASE_URL.format(cik=cik)

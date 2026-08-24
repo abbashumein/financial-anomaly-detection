@@ -1,23 +1,34 @@
 # app/api/main.py
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
 import json
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 from app.services.rag_agent import analyze_company
+from app.services.cache import cache_stats
 from app.database.db import init_db, insert_prediction, get_predictions
+from app.core.security import require_api_key
+
+limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title="Financial Anomaly Detection API",
-    version="1.0.0",
-    description="VAE + RAG + LLM pipeline for SEC EDGAR anomaly analysis",
+    version="2.0.0",
+    description="VAE + Agentic RAG pipeline for SEC EDGAR anomaly investigation",
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=["*"],  # portfolio demo: open by design so recruiters can hit it
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -44,8 +55,9 @@ class AnalyzeResponse(BaseModel):
 
 # ---------- routes ----------
 
-@app.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest):
+@app.post("/analyze", response_model=AnalyzeResponse, dependencies=[Depends(require_api_key)])
+@limiter.limit("10/minute")
+async def analyze(request: Request, req: AnalyzeRequest):
     """Run the live VAE-scoring + agentic RAG pipeline for a given company/tag."""
     try:
         result = analyze_company(req.company_id, req.tag, req.ticker)
@@ -91,3 +103,8 @@ async def list_predictions(
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+@app.get("/cache-stats")
+async def cache_stats_endpoint():
+    """How much is currently cached - useful for demoing that caching works."""
+    return cache_stats()

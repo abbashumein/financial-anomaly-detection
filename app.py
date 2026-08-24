@@ -1,70 +1,82 @@
+# app.py
+"""
+Streamlit frontend for the Agentic Financial Investigation System.
+
+Calls analyze_company() directly (same process) rather than going through
+the FastAPI server over HTTP - this keeps the demo to a single process,
+which matters for free-tier hosting (Hugging Face Spaces / Streamlit
+Community Cloud both run one process per app). The FastAPI app in
+app/api/main.py is still the "real" API for programmatic/external use;
+this dashboard is the human-facing view of the same underlying agent.
+"""
 import streamlit as st
-import torch
-import torch.nn as nn
-import numpy as np
-import pandas as pd
-import os
-from dotenv import load_dotenv
-load_dotenv()
 
-class VAE(nn.Module):
-    def __init__(self, seq_len=20, latent_dim=10):
-        super().__init__()
-        self.encoder = nn.Sequential(nn.Linear(seq_len, 32), nn.ReLU(), nn.Linear(32, latent_dim * 2))
-        self.decoder = nn.Sequential(nn.Linear(latent_dim, 32), nn.ReLU(), nn.Linear(32, seq_len), nn.Sigmoid())
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-    def forward(self, x):
-        h = self.encoder(x)
-        mu, logvar = h.chunk(2, dim=1)
-        z = self.reparameterize(mu, logvar)
-        return self.decoder(z), mu, logvar
+from app.services.rag_agent import analyze_company, DEFAULT_METRIC_BASKET
+from app.services.cache import cache_stats
 
-@st.cache_resource
-def load_model():
-    model = VAE()
-    model.load_state_dict(torch.load("models/vae_model.pt", map_location="cpu"))
-    model.eval()
-    return model
+st.set_page_config(page_title="Financial Investigation Agent", page_icon="🔎", layout="centered")
 
-@st.cache_data
-def load_results():
-    try:
-        return pd.read_csv("data/anomaly_results.csv")
-    except FileNotFoundError:
-        return pd.DataFrame(columns=["company", "tag", "anomaly_score", "risk_level", "is_anomaly", "explanation"])
+st.title("🔎 Agentic Financial Investigation System")
+st.markdown(
+    "VAE anomaly detection + an LLM agent that **decides what evidence to gather** "
+    "from live SEC EDGAR data, rather than a fixed pipeline."
+)
 
-st.title("Financial Anomaly Detection System")
-st.markdown("AI-powered fraud detection on real SEC EDGAR filings")
+with st.sidebar:
+    st.subheader("About")
+    st.markdown(
+        "- **Model**: VAE trained on 285k+ real financial sequences\n"
+        "- **Data**: Live SEC EDGAR `companyfacts` API\n"
+        "- **Agent**: Groq-hosted LLaMA, tool-calling loop\n"
+        "- **Tools**: score, rank anomalous metrics, retrieve similar cases"
+    )
+    st.subheader("Cache")
+    stats = cache_stats()
+    st.metric("Live cached entries", stats["live_entries"])
+    st.caption("Repeat lookups for the same company reuse cached SEC data instead of re-fetching.")
 
-model = load_model()
-results = load_results()
+st.subheader("Investigate a company")
 
-st.subheader("Top Flagged Companies")
-top = results[results["is_anomaly"] == True].nlargest(20, "anomaly_score")
-st.dataframe(top[["company", "tag", "anomaly_score", "risk_level"]])
+col1, col2 = st.columns([2, 1])
+with col1:
+    company_id = st.text_input("SEC CIK number", value="0001318605", help="e.g. 0001318605 (Tesla)")
+with col2:
+    tag = st.selectbox("Metric to investigate", DEFAULT_METRIC_BASKET, index=0)
 
-st.subheader("Investigate a Company")
-company = st.selectbox("Select flagged company", top["company"].unique())
+ticker = st.text_input("Ticker (optional, for display only)", value="")
 
-if st.button("Analyze"):
-    row = top[top["company"] == company].iloc[0]
-    st.metric("Anomaly Score", f"{row.anomaly_score:.4f}")
-    st.metric("Risk Level", row.risk_level)
+if st.button("Run investigation", type="primary"):
+    with st.spinner("Agent is investigating - scoring, then deciding what evidence to pull next..."):
+        try:
+            result = analyze_company(company_id, tag, ticker or None)
+        except Exception as e:
+            st.error(f"Investigation failed: {e}")
+            st.stop()
 
-    with st.spinner("Running LangGraph agent..."):
-        from app.services.rag_agent import analyze_company
-        result = analyze_company(row.company, row.tag, row.anomaly_score)
-        explanation = result.get("final_report", result.get("explanation", "No explanation generated"))
+    risk = result.get("risk_level", "UNKNOWN")
+    risk_color = {"LOW": "green", "MEDIUM": "orange", "HIGH": "red"}.get(risk, "gray")
 
-    st.subheader("AI Explanation")
-    st.write(explanation)
+    st.markdown(f"### Risk level: :{risk_color}[{risk}]")
 
-    if row.risk_level == "HIGH":
-        st.error("HIGH RISK — Recommend immediate audit review")
-    elif row.risk_level == "MEDIUM":
-        st.warning("MEDIUM RISK — Monitor closely")
+    score = result.get("score")
+    if score is not None:
+        st.metric("Reconstruction error", f"{score:.6f}")
+
+    st.subheader("Agent's investigation steps")
+    trace = result.get("agent_trace", [])
+    if trace:
+        st.write(" → ".join(f"`{t}`" for t in trace))
     else:
-        st.success("LOW RISK — Normal variation")
+        st.write("No tools were called.")
+
+    st.subheader("Final report")
+    st.text(result.get("final_report", "No report generated."))
+
+    with st.expander("Raw score data"):
+        st.json(result.get("raw_score_data") or {})
+
+st.divider()
+st.caption(
+    "This is a portfolio project, not investment advice. Anomaly scores reflect "
+    "statistical deviation from training-distribution patterns, not confirmed fraud."
+)
