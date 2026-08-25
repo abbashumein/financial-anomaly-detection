@@ -22,6 +22,7 @@ from app.config.settings import settings
 from app.services import edgar_client
 from app.services import vae_scorer
 from app.services import sec_filing_search
+from app.services import peer_comparison
 from app.services import advanced_retrieval
 
 MAX_AGENT_STEPS = 6
@@ -155,6 +156,68 @@ def tool_get_sec_filing_context(company_id: str, tag: str) -> dict:
     }
 
 
+def tool_compare_to_peers(company_id: str, tag: str, peer_count: int = 3) -> dict:
+    """
+    Compares this company's anomaly score against a few sector peers,
+    scored with the SAME real VAE (tool_score_company_metric reused
+    as-is). Answers: is this unusual for the company, or just how this
+    whole industry looks right now?
+    """
+    try:
+        sic_info = peer_comparison.get_company_sic(company_id)
+    except Exception as e:
+        return {"error": f"Could not determine industry (SIC) for this company: {e}"}
+
+    search_term = sec_filing_search.TAG_TO_SEARCH_TERM.get(tag, tag)
+    cik = peer_comparison.normalize_cik(company_id)
+
+    try:
+        peers = peer_comparison.find_peer_ciks(sic_info["sic"], exclude_cik=cik, search_term=search_term, limit=peer_count)
+    except Exception as e:
+        return {"error": f"Peer search failed: {e}"}
+
+    if not peers:
+        return {
+            "entity_name": sic_info["entity_name"],
+            "sic_description": sic_info["sic_description"],
+            "error": "No peer companies found in this industry for comparison.",
+        }
+
+    target_result = tool_score_company_metric(company_id, tag)
+    if "error" in target_result:
+        return {"error": f"Could not score target company: {target_result['error']}"}
+
+    peer_scores = []
+    for peer in peers:
+        result = tool_score_company_metric(peer["cik"], tag)
+        if "error" not in result:
+            peer_scores.append({
+                "entity_name": result["entity_name"],
+                "reconstruction_error": result["reconstruction_error"],
+                "risk_level": result["risk_level"],
+            })
+
+    if not peer_scores:
+        return {
+            "entity_name": sic_info["entity_name"],
+            "sic_description": sic_info["sic_description"],
+            "target_score": target_result["reconstruction_error"],
+            "error": "Found peer companies but none had scorable data for this metric.",
+        }
+
+    peer_avg = sum(p["reconstruction_error"] for p in peer_scores) / len(peer_scores)
+    target_score = target_result["reconstruction_error"]
+
+    return {
+        "entity_name": sic_info["entity_name"],
+        "sic_description": sic_info["sic_description"],
+        "target_score": target_score,
+        "peer_average_score": round(peer_avg, 6),
+        "more_anomalous_than_peers": target_score > peer_avg,
+        "peers": peer_scores,
+    }
+
+
 def tool_retrieve_similar_cases(company: str, tag: str, n: int = 3) -> str:
     """Finds historically similar anomaly cases for the SAME metric type
     (tag) via metadata-filtered hybrid search + reranking - not blind
@@ -242,6 +305,26 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "compare_to_peers",
+            "description": (
+                "Compares this company's anomaly score against a few sector peers "
+                "(same SIC industry code), scored with the same VAE. Use this to "
+                "determine whether an anomaly is unusual for THIS company specifically, "
+                "or just typical/common across the whole industry right now."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_id": {"type": "string", "description": "SEC CIK number, e.g. '0001318605'"},
+                    "tag": {"type": "string", "description": "The metric tag to compare, e.g. 'NetIncomeLoss'"},
+                },
+                "required": ["company_id", "tag"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "retrieve_similar_cases",
             "description": "Search the historical corpus for similar company/metric anomaly cases to give context for the score.",
             "parameters": {
@@ -287,6 +370,7 @@ DISPATCH = {
     "score_company_metric": lambda args: tool_score_company_metric(args["company_id"], args["tag"]),
     "get_anomalous_metrics": lambda args: tool_get_anomalous_metrics(args["company_id"], args.get("tags")),
     "get_sec_filing_context": lambda args: tool_get_sec_filing_context(args["company_id"], args["tag"]),
+    "compare_to_peers": lambda args: tool_compare_to_peers(args["company_id"], args["tag"]),
     "retrieve_similar_cases": lambda args: tool_retrieve_similar_cases(args["company"], args["tag"], args.get("n", 3)),
     "deep_search": lambda args: tool_deep_search(args["tag"]),
 }
@@ -305,6 +389,8 @@ Rules:
   look for supporting evidence.
 - Once you know which metric is driving it, call get_sec_filing_context
   to find real filing text explaining WHY - cite it in your conclusion.
+- Call compare_to_peers to check whether this is unusual for the company
+  specifically, or common across its whole industry right now.
 - Use retrieve_similar_cases to check whether this pattern has precedent.
 - Only use deep_search if the score is MEDIUM or HIGH and you need more
   evidence before concluding.
