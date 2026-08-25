@@ -566,7 +566,22 @@ def analyze_company(company_id: str, tag: str, ticker: str = None) -> dict:
             temperature=0.1,
         )
         msg = response.choices[0].message
-        messages.append({"role": "assistant", "content": msg.content, "tool_calls": msg.tool_calls})
+        assistant_message = {
+            "role": "assistant",
+            "content": msg.content or ""
+        }
+
+        if msg.tool_calls:
+            assistant_message["tool_calls"] = msg.tool_calls
+
+        messages.append(assistant_message)
+
+        if not msg.tool_calls:
+            messages.append({
+                "role": "user",
+                "content": "Please use conclude to finish, or call a tool."
+            })
+            continue
 
         if not msg.tool_calls:
             # model replied without calling a tool - nudge it back on track
