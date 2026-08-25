@@ -84,7 +84,7 @@ def extract_entities_from_excerpt(excerpt: str, company_cik: str) -> list[dict]:
 
     try:
         response = _get_groq().chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=settings.groq_model,
             messages=[{"role": "user", "content": EXTRACTION_PROMPT + excerpt}],
             temperature=0,
             max_tokens=300,

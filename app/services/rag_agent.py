@@ -559,7 +559,7 @@ def analyze_company(company_id: str, tag: str, ticker: str = None) -> dict:
 
     for step in range(MAX_AGENT_STEPS):
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=settings.groq_model,
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",
