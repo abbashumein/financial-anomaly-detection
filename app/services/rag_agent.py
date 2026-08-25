@@ -22,6 +22,7 @@ from app.config.settings import settings
 from app.services import edgar_client
 from app.services import vae_scorer
 from app.services import sec_filing_search
+from app.services import advanced_retrieval
 
 MAX_AGENT_STEPS = 6
 
@@ -31,16 +32,19 @@ chroma_client = chromadb.PersistentClient(path="data/chromadb")
 ef = DefaultEmbeddingFunction()
 collection = chroma_client.get_or_create_collection(name="anomalies", embedding_function=ef)
 
+df = pd.read_csv("data/anomaly_results.csv").dropna(subset=["company", "tag", "anomaly_score"]).head(500)
+docs, metas, ids = [], [], []
+for i, row in df.iterrows():
+    docs.append(f"Company: {row['company']} Metric: {row['tag']} Score: {row['anomaly_score']}")
+    metas.append({"company": str(row["company"]), "tag": str(row["tag"])})
+    ids.append(str(i))
+
 if collection.count() == 0:
     print("Ingesting...")
-    df = pd.read_csv("data/anomaly_results.csv").dropna(subset=["company", "tag", "anomaly_score"]).head(500)
-    docs, metas, ids = [], [], []
-    for i, row in df.iterrows():
-        docs.append(f"Company: {row['company']} Metric: {row['tag']} Score: {row['anomaly_score']}")
-        metas.append({"company": str(row["company"]), "tag": str(row["tag"])})
-        ids.append(str(i))
     collection.add(documents=docs, metadatas=metas, ids=ids)
     print(f"Done - {len(docs)} records")
+
+advanced_retrieval.build_bm25_index(docs, metas)
 
 groq_client = Groq(api_key=settings.groq_api_key)
 
@@ -152,15 +156,24 @@ def tool_get_sec_filing_context(company_id: str, tag: str) -> dict:
 
 
 def tool_retrieve_similar_cases(company: str, tag: str, n: int = 3) -> str:
-    results = collection.query(query_texts=[f"{company} {tag}"], n_results=n)
-    docs = results["documents"][0] if results["documents"] else []
-    return "\n".join(docs) if docs else "No similar cases found in the historical corpus."
+    """Finds historically similar anomaly cases for the SAME metric type
+    (tag) via metadata-filtered hybrid search + reranking - not blind
+    top-k semantic search."""
+    query = f"{company} {tag}"
+    top = advanced_retrieval.retrieve(collection, query, tag=tag, top_n=n)
+    if not top:
+        return "No similar cases found in the historical corpus."
+    return "\n".join(c["doc"] for c in top)
 
 
 def tool_deep_search(tag: str) -> str:
-    results = collection.query(query_texts=[f"{tag} fraud anomaly high risk"], n_results=5)
-    docs = results["documents"][0] if results["documents"] else []
-    return "\n".join(docs) if docs else "No broader patterns found."
+    """Broader search across ALL cases for this metric tag (no company
+    filter) - still metadata-filtered, hybrid, and reranked."""
+    query = f"{tag} fraud anomaly high risk"
+    top = advanced_retrieval.retrieve(collection, query, tag=tag, top_n=5)
+    if not top:
+        return "No broader patterns found."
+    return "\n".join(c["doc"] for c in top)
 
 
 TOOLS = [
