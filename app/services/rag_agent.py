@@ -24,6 +24,7 @@ from app.services import vae_scorer
 from app.services import sec_filing_search
 from app.services import peer_comparison
 from app.services import advanced_retrieval
+from app.services import graph_rag
 
 MAX_AGENT_STEPS = 6
 
@@ -275,6 +276,46 @@ def tool_get_historical_trend(company_id: str, tag: str) -> dict:
     }
 
 
+def tool_graph_investigate(company_id: str, tag: str) -> dict:
+    """
+    Builds a small knowledge graph from the SAME evidence the other
+    tools already gather (score, filing text, peers) plus one cached
+    LLM extraction pass over the filing excerpt, then runs a multi-hop
+    traversal. Answers questions flat retrieval can't: what is this
+    company CONNECTED to, and through what chain of relationships?
+    """
+    cik = edgar_client.normalize_cik(company_id)
+
+    score_result = tool_score_company_metric(company_id, tag)
+    entity_name = score_result.get("entity_name", company_id)
+    graph_rag.add_company(cik, entity_name)
+
+    if "error" not in score_result:
+        graph_rag.add_metric_relationship(cik, tag, score_result["risk_level"])
+
+    filing_result = tool_get_sec_filing_context(company_id, tag)
+    if "error" not in filing_result:
+        graph_rag.add_filing_relationship(cik, filing_result["source_url"], filing_result["form"], tag)
+        graph_rag.extract_entities_from_excerpt(filing_result["excerpt"], cik)
+
+    peer_result = tool_compare_to_peers(company_id, tag)
+    if "error" not in peer_result:
+        for peer in peer_result.get("peers", []):
+            # peer dicts from tool_compare_to_peers don't carry a CIK
+            # (only name+score) - use the name as the graph key when
+            # that's all we have.
+            peer_key = peer.get("cik", f"peer:{peer['entity_name']}")
+            graph_rag.add_peer_relationship(cik, peer_key, peer["entity_name"])
+
+    connections = graph_rag.find_connections(cik, max_hops=3)
+
+    return {
+        "entity_name": entity_name,
+        "graph_stats": graph_rag.graph_stats(),
+        "connections": connections[:10],
+    }
+
+
 def tool_retrieve_similar_cases(company: str, tag: str, n: int = 3) -> str:
     """Finds historically similar anomaly cases for the SAME metric type
     (tag) via metadata-filtered hybrid search + reranking - not blind
@@ -404,6 +445,28 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "graph_investigate",
+            "description": (
+                "Builds a small knowledge graph from evidence already gathered "
+                "(score, filing text, peers) and finds multi-hop connections - "
+                "e.g. shared subsidiaries or related entities mentioned in the "
+                "filing text. Use this LAST, after other evidence-gathering "
+                "tools, for the most complete picture. Optional - only call if "
+                "you want to check for less-obvious connections."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_id": {"type": "string", "description": "SEC CIK number, e.g. '0001318605'"},
+                    "tag": {"type": "string", "description": "The metric tag being investigated"},
+                },
+                "required": ["company_id", "tag"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "retrieve_similar_cases",
             "description": "Search the historical corpus for similar company/metric anomaly cases to give context for the score.",
             "parameters": {
@@ -451,6 +514,7 @@ DISPATCH = {
     "get_sec_filing_context": lambda args: tool_get_sec_filing_context(args["company_id"], args["tag"]),
     "compare_to_peers": lambda args: tool_compare_to_peers(args["company_id"], args["tag"]),
     "get_historical_trend": lambda args: tool_get_historical_trend(args["company_id"], args["tag"]),
+    "graph_investigate": lambda args: tool_graph_investigate(args["company_id"], args["tag"]),
     "retrieve_similar_cases": lambda args: tool_retrieve_similar_cases(args["company"], args["tag"], args.get("n", 3)),
     "deep_search": lambda args: tool_deep_search(args["tag"]),
 }
@@ -475,6 +539,8 @@ Rules:
   gradually or happened suddenly - these usually mean very different
   things and should be described differently in your conclusion.
 - Use retrieve_similar_cases to check whether this pattern has precedent.
+- Optionally call graph_investigate LAST for a multi-hop connections
+  check (e.g. shared subsidiaries) - not required for every investigation.
 - Only use deep_search if the score is MEDIUM or HIGH and you need more
   evidence before concluding.
 - Call conclude as soon as you have enough evidence. Don't call tools
