@@ -68,17 +68,11 @@ def fetch_company_facts(company_id: str) -> dict:
     return resp.json()
 
 
-def build_sequence(facts: dict, tag: str, max_len: int = MAX_LEN, window: int = WINDOW_QUARTERS):
-    """
-    Shape-matched to training:
-      - pull the tag's USD-unit values, sorted chronologically
-      - keep only the most recent `window` points (default 6, matching the
-        training notebook's bulk data window) - NOT all `max_len` slots
-      - min-max scale those points to [0, 1]
-      - zero-pad the rest of the `max_len`-length array
-
-    Returns (padded_array[float32, shape=(max_len,)], raw_values, dates, unit_used)
-    """
+def _get_ordered_points(facts: dict, tag: str) -> tuple[list[dict], str]:
+    """Shared parsing: all dated, de-duplicated (latest restatement wins)
+    values for a tag, sorted chronologically. Used by both build_sequence
+    (which windows+scales this for the VAE) and get_full_history (which
+    doesn't window - it wants the long view)."""
     gaap = facts.get("facts", {}).get("us-gaap", {})
     if tag not in gaap:
         available = sorted(gaap.keys())
@@ -93,7 +87,6 @@ def build_sequence(facts: dict, tag: str, max_len: int = MAX_LEN, window: int = 
         raise EdgarLookupError(f"Tag '{tag}' has no usable unit data.")
 
     points = units[unit_key]
-    # de-dupe same-period restatements: keep the latest filed value per end date
     by_end = {}
     for p in points:
         if "end" in p and "val" in p:
@@ -102,6 +95,37 @@ def build_sequence(facts: dict, tag: str, max_len: int = MAX_LEN, window: int = 
 
     if not ordered:
         raise EdgarLookupError(f"Tag '{tag}' has no dated values.")
+
+    return ordered, unit_key
+
+
+def get_full_history(company_id: str, tag: str) -> dict:
+    """All available dated values for a tag - NOT windowed to the VAE's
+    6-quarter training window. Used for trend-shape analysis (sudden
+    spike vs gradual drift), which needs more history than the model
+    itself looks at."""
+    facts = fetch_company_facts(company_id)
+    ordered, unit_key = _get_ordered_points(facts, tag)
+    return {
+        "entity_name": facts.get("entityName", company_id),
+        "values": [float(p["val"]) for p in ordered],
+        "dates": [p["end"] for p in ordered],
+        "unit": unit_key,
+    }
+
+
+def build_sequence(facts: dict, tag: str, max_len: int = MAX_LEN, window: int = WINDOW_QUARTERS):
+    """
+    Shape-matched to training:
+      - pull the tag's USD-unit values, sorted chronologically
+      - keep only the most recent `window` points (default 6, matching the
+        training notebook's bulk data window) - NOT all `max_len` slots
+      - min-max scale those points to [0, 1]
+      - zero-pad the rest of the `max_len`-length array
+
+    Returns (padded_array[float32, shape=(max_len,)], raw_values, dates, unit_used)
+    """
+    ordered, unit_key = _get_ordered_points(facts, tag)
 
     recent = ordered[-window:]
     raw_values = [float(p["val"]) for p in recent]

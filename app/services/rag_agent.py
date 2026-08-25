@@ -218,6 +218,63 @@ def tool_compare_to_peers(company_id: str, tag: str, peer_count: int = 3) -> dic
     }
 
 
+def tool_get_historical_trend(company_id: str, tag: str) -> dict:
+    """
+    Looks at MORE history than the VAE's 6-quarter window to answer a
+    question the model can't: did this change happen suddenly in one
+    period, or build up gradually? Two companies can have the same
+    anomaly score for very different reasons - this tells them apart.
+    """
+    try:
+        history = edgar_client.get_full_history(company_id, tag)
+    except Exception as e:
+        return {"error": str(e)}
+
+    values = history["values"]
+    dates = history["dates"]
+
+    if len(values) < 3:
+        return {
+            "entity_name": history["entity_name"],
+            "error": f"Only {len(values)} historical data points available - not enough to assess a trend.",
+        }
+
+    # period-over-period percent changes
+    pct_changes = []
+    for i in range(1, len(values)):
+        prev, curr = values[i - 1], values[i]
+        if prev == 0:
+            continue
+        pct_changes.append((curr - prev) / abs(prev) * 100)
+
+    if not pct_changes:
+        return {
+            "entity_name": history["entity_name"],
+            "error": "Could not compute period-over-period changes (all-zero or single-value history).",
+        }
+
+    abs_changes = [abs(c) for c in pct_changes]
+    largest_change = max(abs_changes)
+    largest_change_idx = abs_changes.index(largest_change)
+    other_changes = abs_changes[:largest_change_idx] + abs_changes[largest_change_idx + 1:]
+    typical_change = (sum(other_changes) / len(other_changes)) if other_changes else 0
+
+    # a "sudden spike" is one period that moved dramatically more than
+    # the typical period-over-period move; anything else is gradual drift
+    is_sudden = largest_change > max(typical_change * 3, 25)  # >3x typical move, or >25% outright
+
+    return {
+        "entity_name": history["entity_name"],
+        "n_periods": len(values),
+        "date_range": f"{dates[0]} to {dates[-1]}",
+        "period_over_period_pct_changes": [round(c, 1) for c in pct_changes],
+        "largest_single_period_change_pct": round(pct_changes[largest_change_idx], 1),
+        "largest_change_date": dates[largest_change_idx + 1],
+        "typical_change_pct": round(typical_change, 1),
+        "pattern": "sudden_spike" if is_sudden else "gradual_drift",
+    }
+
+
 def tool_retrieve_similar_cases(company: str, tag: str, n: int = 3) -> str:
     """Finds historically similar anomaly cases for the SAME metric type
     (tag) via metadata-filtered hybrid search + reranking - not blind
@@ -325,6 +382,28 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_historical_trend",
+            "description": (
+                "Looks at MORE history than the anomaly score itself uses, to "
+                "determine whether a change happened SUDDENLY in one period "
+                "(often more concerning - e.g. one-time write-off, restatement) "
+                "or built up GRADUALLY over many periods (often less concerning - "
+                "e.g. steady business growth). Use this to distinguish these two "
+                "very different explanations for the same anomaly score."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "company_id": {"type": "string", "description": "SEC CIK number, e.g. '0001318605'"},
+                    "tag": {"type": "string", "description": "The metric tag to analyze, e.g. 'NetIncomeLoss'"},
+                },
+                "required": ["company_id", "tag"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "retrieve_similar_cases",
             "description": "Search the historical corpus for similar company/metric anomaly cases to give context for the score.",
             "parameters": {
@@ -371,6 +450,7 @@ DISPATCH = {
     "get_anomalous_metrics": lambda args: tool_get_anomalous_metrics(args["company_id"], args.get("tags")),
     "get_sec_filing_context": lambda args: tool_get_sec_filing_context(args["company_id"], args["tag"]),
     "compare_to_peers": lambda args: tool_compare_to_peers(args["company_id"], args["tag"]),
+    "get_historical_trend": lambda args: tool_get_historical_trend(args["company_id"], args["tag"]),
     "retrieve_similar_cases": lambda args: tool_retrieve_similar_cases(args["company"], args["tag"], args.get("n", 3)),
     "deep_search": lambda args: tool_deep_search(args["tag"]),
 }
@@ -391,6 +471,9 @@ Rules:
   to find real filing text explaining WHY - cite it in your conclusion.
 - Call compare_to_peers to check whether this is unusual for the company
   specifically, or common across its whole industry right now.
+- Call get_historical_trend to check whether the anomaly built up
+  gradually or happened suddenly - these usually mean very different
+  things and should be described differently in your conclusion.
 - Use retrieve_similar_cases to check whether this pattern has precedent.
 - Only use deep_search if the score is MEDIUM or HIGH and you need more
   evidence before concluding.
