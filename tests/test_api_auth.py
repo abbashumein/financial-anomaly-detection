@@ -6,10 +6,6 @@ network calls, no real Groq/EDGAR calls needed for these specific checks.
 import os
 import pytest
 
-# API_KEY must be set BEFORE importing app.config.settings (it's read at
-# import time), so we set it here before any app.* import happens.
-os.environ["API_KEY"] = "test-secret-123"
-
 from fastapi.testclient import TestClient
 from app.api.main import app
 
