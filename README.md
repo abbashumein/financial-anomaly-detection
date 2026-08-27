@@ -1,24 +1,32 @@
 # Financial Anomaly Detection
 
-> An agentic AI system for financial anomaly investigation — a live tool-calling LLM agent orchestrating a trained deep learning model against real-time SEC filing data.
+This is an AI system, not just a model: a tool-calling LLM agent (Groq-hosted, currently openai/gpt-oss-120b) that investigates a company's SEC filings in real time, deciding for itself which of 6 tools to call, in what order, and when it has enough evidence to conclude.
 
-## What It Does
+At the core of the agent's toolset is a Variational Autoencoder, trained offline on 285,000+ real financial sequences from SEC EDGAR, which learned what "normal" financial reporting looks like for a given metric. No labeled fraud dataset exists for SEC filings — the model has to learn structure from the data itself, and anything it reconstructs poorly gets flagged as statistically unusual.
 
-This is an AI system, not just a model: a tool-calling LLM agent (Llama 3.3 via Groq) that investigates a company's SEC filings in real time, deciding for itself which evidence to gather and when it has enough to conclude.
+The deployed API wires all of this together live, not from a cache. Given a company's SEC CIK and a financial metric (e.g. Assets, NetIncomeLoss), the agent can:
 
-At the core of the agent's toolset is a Variational Autoencoder, trained offline on 22 million rows of real SEC EDGAR filings across 6 quarters (2024Q4–2026Q1), which learned what "normal" financial reporting looks like for a given metric. No labeled fraud dataset exists for SEC filings — the model has to learn structure from the data itself, and anything it reconstructs poorly gets flagged as statistically unusual.
+Score the metric with a real VAE forward pass on live SEC EDGAR data
+Rank which specific metrics are driving an anomaly (get_anomalous_metrics)
+Pull real supporting text from the company's actual 10-K/10-Q filings (get_sec_filing_context)
+Compare the company against sector peers using the same VAE (compare_to_peers)
+Distinguish a sudden one-time spike from gradual drift (get_historical_trend)
+Check for multi-hop connections — shared subsidiaries, related entities — via a small knowledge graph (graph_investigate)
 
-The deployed API wires all of this together live, not from a cache. Given a company's SEC CIK and a financial metric (e.g. `Assets`, `NetIncomeLoss`), the agent:
-1. Calls a tool that pulls the company's real, current filing history from the SEC EDGAR `companyfacts` API and runs it through the trained VAE for a real forward pass
-2. Decides — on its own, per investigation — whether to pull historical precedent from a vector store, search for broader risk patterns, or conclude
-3. Produces a final risk assessment with a full trace of which tools it called and why
+Retrieval itself isn't blind top-k search: candidates are metadata-filtered, combined from semantic + keyword (BM25) search, then reranked with a CrossEncoder before reaching the LLM.
 
-That decision-making is the actual "agentic" part: the agent isn't following a fixed script. Across test runs, it called a different number of tools depending on how strong the initial evidence was — 2 tools when the signal was clearly low-risk, 3 when it wasn't.
+That decision-making is the actual "agentic" part: the agent isn't following a fixed script — it calls a different number and combination of tools per investigation, based on how strong the evidence looks at each step.
 
 ## Architecture
 
 ```
-SEC EDGAR companyfacts API (live, per-request, no API key)
+SEC EDGAR APIs (live, per-request, no API key)
+  - companyfacts (structured financial data)
+  - full-text search (real filing text + industry/SIC lookup)
+         │
+         ▼
+  In-memory TTL cache (15 min) ── same company across multiple
+                                   tags/tools hits SEC once, not N times
          │
          ▼
   Sequence builder ── window-bounded to match training shape,
@@ -32,22 +40,33 @@ SEC EDGAR companyfacts API (live, per-request, no API key)
                   (p90 = 0.087, p95 = 0.105, from 285,275 sequences)
          │
          ▼
-  Tool-Calling Agent (Llama 3.3 via Groq)
-  ┌────────────────────────────────────────────────────┐
-  │  agent decides which tool to call next, and when    │
-  │  it has enough evidence to stop:                    │
-  │                                                      │
-  │  score_company_metric  → always called first         │
-  │  retrieve_similar_cases → check historical precedent │
-  │  deep_search           → only if evidence is weak     │
-  │  conclude              → ends the investigation       │
-  └────────────────────────────────────────────────────┘
+  Tool-Calling Agent (Groq-hosted LLM, configurable model)
+  ┌──────────────────────────────────────────────────────────┐
+  │  agent decides which tool to call next, and when          │
+  │  it has enough evidence to stop:                          │
+  │                                                            │
+  │  score_company_metric    → always called first             │
+  │  get_anomalous_metrics   → which metrics drive the anomaly │
+  │  get_sec_filing_context  → real evidence from 10-K/10-Q    │
+  │  compare_to_peers        → same-industry comparison         │
+  │  get_historical_trend    → sudden spike vs gradual drift    │
+  │  retrieve_similar_cases  → historical precedent (see below) │
+  │  graph_investigate       → optional multi-hop connections   │
+  │  conclude                → ends the investigation           │
+  └──────────────────────────────────────────────────────────┘
          │
          ▼
-  RAG (ChromaDB, local persistent store, sentence-transformer embeddings)
+  Advanced RAG ── metadata filtering (same metric tag) →
+                  hybrid search (Chroma semantic + BM25 keyword) →
+                  CrossEncoder reranking → top-N to the LLM
          │
          ▼
-  FastAPI (/analyze, /predictions, /health)
+  GraphRAG (networkx, in-memory) ── deterministic edges from the
+                  tools above + one cached LLM extraction per unique
+                  filing excerpt → multi-hop traversal
+         │
+         ▼
+  FastAPI (/analyze [API-key + rate-limited], /health, /cache-stats)
          │
          ▼
   SQLite ── every prediction persisted for audit history
@@ -91,17 +110,24 @@ Being upfront about these rather than glossing over them, because they're the ki
 | Layer | Tool |
 |---|---|
 | Agent orchestration | Hand-rolled tool-calling loop (Groq function-calling API) |
-| LLM | Llama 3.3 via Groq |
+| LLM | Groq-hosted (configurable via `GROQ_MODEL`, default `openai/gpt-oss-120b`) |
 | Deep learning model | PyTorch VAE |
-| Live data source | SEC EDGAR `companyfacts` API (public, free, no key) |
+| Live data source | SEC EDGAR `companyfacts` API + full-text search API (public, free, no key) |
 | Vector database | ChromaDB (local persistent store) |
 | Embeddings | Sentence-transformer (ChromaDB default, ONNX MiniLM) |
+| Keyword search | BM25 (`rank_bm25`) — combined with embeddings for hybrid retrieval |
+| Reranking | CrossEncoder (`sentence-transformers`, `ms-marco-MiniLM-L-6-v2`) |
+| Knowledge graph | NetworkX (in-memory) — multi-hop entity/relationship traversal |
 | Data processing (offline) | Polars |
 | Baseline comparison (offline) | scikit-learn Isolation Forest |
 | API | FastAPI + Pydantic |
+| Auth & rate limiting | Custom API-key dependency + SlowAPI |
+| Caching | In-memory TTL cache (SEC API calls) |
 | Database | SQLite |
+| Frontend | Streamlit |
+| Testing | pytest (39 tests — unit, integration, regression) |
 | Containerization | Docker |
-| CI/CD | GitHub Actions |
+| CI/CD | GitHub Actions (runs full test suite on every push) |
 | Config | pydantic-settings + `.env` |
 
 ## Project Structure
@@ -109,104 +135,97 @@ Being upfront about these rather than glossing over them, because they're the ki
 ```
 financial-anomaly-detection/
 ├── app/
-│   ├── api/main.py            # FastAPI endpoints
-│   ├── config/settings.py     # pydantic-settings, reads .env
-│   ├── database/db.py         # SQLite — stores all predictions
-│   ├── models/vae.py          # VAE architecture + load function
+│   ├── api/main.py                 # FastAPI endpoints (auth + rate-limited)
+│   ├── config/settings.py          # pydantic-settings, reads .env
+│   ├── core/security.py            # API-key auth dependency
+│   ├── database/db.py              # SQLite — stores all predictions
+│   ├── models/vae.py               # VAE architecture + load function
 │   └── services/
-│       ├── edgar_client.py    # live SEC EDGAR fetch + sequence builder
-│       ├── vae_scorer.py      # loads trained weights, runs live scoring
-│       └── rag_agent.py       # tool-calling agent + ChromaDB retrieval
-├── anomaly_detection.ipynb    # offline training notebook
+│       ├── edgar_client.py         # live SEC EDGAR fetch + sequence builder
+│       ├── vae_scorer.py           # loads trained weights, runs live scoring
+│       ├── cache.py                # in-memory TTL cache for SEC API calls
+│       ├── sec_filing_search.py    # real 10-K/10-Q filing text search
+│       ├── peer_comparison.py      # industry (SIC) peer lookup + scoring
+│       ├── advanced_retrieval.py   # metadata filter + hybrid search + rerank
+│       ├── graph_rag.py            # in-memory knowledge graph, multi-hop
+│       └── rag_agent.py            # tool-calling agent (6 tools) + retrieval
+├── tests/                          # 39 tests: unit, integration, regression
+│   ├── conftest.py
+│   ├── _stubs/                     # lightweight fallbacks if heavy deps absent
+│   └── test_*.py
+├── app.py                          # Streamlit frontend
+├── anomaly_detection.ipynb         # offline training notebook
+├── .github/workflows/deploy.yml    # CI — runs tests on every push
+├── .env.example
 ├── Dockerfile
-├── requirements.txt
+├── requirements.txt                # pinned versions
 └── .gitignore
 ```
 
-## API Reference
+## Problem
 
-### `POST /analyze`
+SEC filings are public, but nobody actually reads them at scale. Regulators, analysts, and auditors rely on humans manually flagging "this number looks weird" — a process that doesn't scale past a handful of companies and misses subtle statistical anomalies a human wouldn't catch by eye.
 
-Runs the live VAE-scoring + agentic RAG pipeline for a company/metric pair.
+There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare, disclosed inconsistently, and legally sensitive. So this project treats it as an unsupervised problem: learn what *normal* financial reporting looks like, and flag anything a trained model can't reconstruct well as statistically unusual — then have an AI agent investigate *why*, the way a human analyst would.
 
-**Request:**
-```json
-{
-  "company_id": "0001318605",
-  "tag": "Assets",
-  "ticker": "TSLA"
-}
-```
-`company_id` is the company's SEC CIK number. `tag` is any US-GAAP tag the company discloses (e.g. `Assets`, `Revenues`, `NetIncomeLoss`). `ticker` is optional.
 
-**Response:**
-```json
-{
-  "prediction_id": 3,
-  "company_id": "0001318605",
-  "anomaly_score": 0.05192,
-  "is_anomaly": false,
-  "risk_level": "LOW",
-  "explanation": "[LOW RISK] 0001318605 | Metric: Assets\n\nFINDING: ...\n\nAGENT TRACE: score_company_metric -> retrieve_similar_cases"
-}
-```
+## What This Achieves
 
-The `explanation` field includes an `AGENT TRACE` showing exactly which tools the agent called and in what order.
+- A **real trained model** (VAE, not a heuristic) that scores live company data against a learned baseline of normal financial behavior
+- An **agent that investigates, not just scores** — given a flagged company, it autonomously decides whether to check which specific metric is driving the anomaly, pull real filing text as evidence, compare against industry peers, check if the change was sudden or gradual, and search for historical precedent — the same steps a human analyst would take, but decided by the LLM per-investigation, not hardcoded
+- **Advanced retrieval, not blind search** — metadata filtering, hybrid (semantic + keyword) search, and CrossEncoder reranking, so retrieved evidence is actually relevant, not just "closest by embedding"
+- **A small knowledge graph layer** enabling multi-hop questions flat retrieval can't answer, like "is this company connected to another flagged company through a shared subsidiary?"
+- **Production-adjacent engineering**: 39 automated tests, CI that runs them on every push, pinned dependencies, API auth + rate limiting, caching, and a working frontend — not just a notebook
 
-### `GET /predictions`
-List stored predictions, optional company filter.
 
-### `GET /health`
-Health check — returns `{"status": "ok"}`.
+## Known Limitations
 
-## How to Run
+- **No labeled fraud ground truth.** The VAE flags statistical deviation from normal patterns, not confirmed fraud — a HIGH score means "unusual," not "fraudulent." There's no dataset of confirmed SEC fraud cases to validate detection accuracy against.
+- **Moderate AUROC (0.72)** against a proxy Isolation Forest baseline, not a true fraud label — disclosed here rather than hidden, since it's a realistic number for an unsupervised approach on this kind of data.
+- **Not horizontally scalable as-is.** The cache and knowledge graph are in-memory and per-process — they reset on restart and aren't shared across multiple server instances. Fine for a single-process portfolio deployment; would need Redis + a real graph database for multi-instance production use.
+- **First-request latency.** The CrossEncoder reranker and BM25 index both build/download on first use, adding a few seconds to the very first investigation after startup. Subsequent requests are fast.
+- **Peer discovery depends on SEC's full-text search matching well.** `compare_to_peers` finds companies in the same industry (SIC code) that also mention the relevant financial term — it can occasionally miss true peers or surface a loose match if the search term is too generic.
+- **Single shared API key, no per-user accounts.** Auth is a single `X-API-Key` check, appropriate for a portfolio demo but not multi-tenant production use.
+- **SQLite, not a production database.** Fine for single-instance prediction logging; would need Postgres or similar under real concurrent write load.
+- **Free-tier Groq rate limits apply.** Heavy usage could hit Groq's free-tier request limits; there's no fallback LLM provider configured.
+- **Investigation latency.** A full multi-tool investigation (score → rank → filing search → peers → trend → graph) can take 10-30+ seconds depending on how many tools the agent chooses to call — there's no streaming response yet.
 
-### Local
-```bash
-git clone https://github.com/abbashumein/financial-anomaly-detection
-cd financial-anomaly-detection
+## Performance
 
-python -m venv venv
-source venv/bin/activate   # or venv\Scripts\activate on Windows
+**Model calibration** (against 285,275 real training sequences):
+| Metric | Value |
+|---|---|
+| AUROC (vs. Isolation Forest proxy baseline) | 0.7226 |
+| p50 (typical reconstruction error) | 0.0438 |
+| p90 threshold | 0.0867 |
+| p95 (anomaly threshold) | 0.1052 |
 
-pip install -r requirements.txt
 
-cp .env.example .env
-# fill in GROQ_API_KEY and EDGAR_USER_AGENT
+**System efficiency** (measured, not estimated):
 
-uvicorn app.api.main:app --reload
-```
+| Metric | Value |
+|---|---|
+| SEC API calls per company investigation | 1, cached — down from 5 (one per metric) before caching was added |
+| Test suite size | 39 tests |
+| Test suite runtime | ~7-30s (varies with cold-start model loading) |
+| CI | Runs full suite on every push via GitHub Actions |
 
-### Docker
-```bash
-docker build -t anomaly-detection .
-docker run -p 8000:8000 --env-file .env anomaly-detection
-```
+**Note:** there is no precision/recall/F1 reported here, because there's no labeled ground-truth fraud dataset to compute them against (see Known Limitations) — AUROC against a proxy baseline is the honest number available for this kind of unsupervised problem.
 
-## Environment Variables
 
-```
-GROQ_API_KEY=your_groq_key_here        # required — powers the tool-calling agent
-EDGAR_USER_AGENT=your-name your-app/1.0 (your_email@example.com)   # required — SEC rejects requests without a descriptive User-Agent
-```
+## Engineering Challenges & How They Were Solved
 
-Get a free Groq key: https://console.groq.com
 
-## Training Data
+| Challenge | What went wrong | Fix |
+|---|---|---|
+| **Distribution mismatch** | Live inference pulled a company's *full* filing history, but the VAE was trained on short, fixed-length windows — scores were meaningless | Rebuilt the sequence pipeline to window live data to match the exact shape the model was trained on |
+| **Repeated SEC API calls** | Investigating one company across 5 metrics triggered 5 separate SEC API calls for the same underlying data | Added a 15-minute in-memory TTL cache on the network layer — same company now costs 1 API call, not 5 |
+| **Blind retrieval** | The original RAG only did plain semantic similarity search — no filtering, so a Revenue anomaly could get compared against unrelated Liabilities cases | Rebuilt as a 3-stage pipeline: metadata filtering → hybrid (semantic + BM25 keyword) search → CrossEncoder reranking |
+| **Silent test-suite gap** | The historical-cases index only got built the *first* time the app ran (empty-database check) — meant it silently didn't exist on every subsequent run | Refactored so the index always builds from the full dataset, regardless of whether ingestion already happened |
+| **Model deprecation, mid-project** | Groq deprecated `llama-3.3-70b-versatile` during development — the agent returned 404s with no warning | Replaced the hardcoded model name with a `GROQ_MODEL` setting, so future deprecations are a one-line `.env` change, not a code hunt |
+| **API protocol mismatch after model swap** | The new model rejected conversation turns where a prior assistant message had `"tool_calls": null` — Groq's stricter validation caught what the old model silently tolerated | Fixed message construction to omit the `tool_calls` key entirely when the LLM has no tool call, instead of setting it to `null` |
+| **Order-dependent test failures** | Auth tests passed alone but failed in the full suite — a different test file imported the settings module first, locking in an empty API key before the auth test could set it | Moved required test environment variables into `conftest.py`, which always runs before test collection, regardless of file order |
 
-Offline training used SEC EDGAR's public bulk financial statement datasets: https://www.sec.gov/data-research/sec-markets-data/financial-statement-data-sets
-
-Quarters used: 2024Q4, 2025Q1, 2025Q2, 2025Q3, 2025Q4, 2026Q1
-
-## Design Decisions
-
-**Why a VAE?** No labeled fraud dataset exists for SEC filings, so this had to be unsupervised. The tradeoff: it flags statistically unusual, not fraudulent — a legitimately fast-growing company can score like a genuinely suspicious one. That's why the agent retrieves precedent and pattern-searches instead of treating the raw VAE score as a verdict.
-
-**Why Groq + Llama over OpenAI?** Open-source model, no per-token cost at development scale, fast inference — good fit for a portfolio project with real usage during interviews/demos.
-
-**Why a hand-rolled tool-calling loop instead of LangGraph?** An earlier version used a fixed LangGraph pipeline with a hardcoded input score — the VAE was never actually called at inference time. Rebuilding as a direct tool-calling loop against Groq's function-calling API made the control flow fully visible and let the LLM genuinely decide the investigation path, rather than hiding that decision inside a framework abstraction.
-
-**Why ChromaDB over FAISS?** Runs fully in-process with a local persistent store, no separate index-management step — simpler for a project at this scale.
 
 ## Author
 
