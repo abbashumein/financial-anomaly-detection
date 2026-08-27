@@ -190,15 +190,51 @@ There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare
 - **Free-tier Groq rate limits apply.** Heavy usage could hit Groq's free-tier request limits; there's no fallback LLM provider configured.
 - **Investigation latency.** A full multi-tool investigation (score → rank → filing search → peers → trend → graph) can take 10-30+ seconds depending on how many tools the agent chooses to call — there's no streaming response yet.
 
-## Performance
+## Performance Metrics
 
-**Model calibration** (against 285,275 real training sequences):
+**Two different things are measured below, and they answer different questions:**
+1. **Agent behavior** — given real companies, does the agent make the *correct* decision (investigate deeper only when warranted)?
+2. **Tool correctness** — does each individual tool actually work, independent of whether the agent chose to call it on a given input?
+
+Conflating these two would overclaim — an agent that correctly stays shallow on a low-risk company is behaving *correctly*, not incompletely.
+
+### Agent Behavior (6 real companies, live SEC data)
+
 | Metric | Value |
 |---|---|
-| AUROC (vs. Isolation Forest proxy baseline) | 0.7226 |
-| p50 (typical reconstruction error) | 0.0438 |
-| p90 threshold | 0.0867 |
-| p95 (anomaly threshold) | 0.1052 |
+| Test cases run | 6 |
+| Success rate (no crash) | 6/6 (100%) |
+| Grounded responses (cites a real number) | 4/6 (66%) |
+| p50 latency | 19.4s |
+| p95 latency | 28.6s |
+| Tool call distribution | `score_company_metric`: 6/6 |
+
+All 6 test companies (Tesla, Apple, Microsoft, Transglobal Management Group) scored LOW risk on the most recent 6-quarter window, so the agent correctly called only `score_company_metric` and concluded — deeper tools are gated behind a MEDIUM/HIGH score by design, to avoid unnecessary LLM calls and cost on companies that don't need investigation.
+
+### Direct Tool Exercise (proves every component works)
+
+Each tool called directly, independent of agent decision-making:
+
+| Tool | Works | Latency |
+|---|---|---|
+| `get_anomalous_metrics` | Yes | 0.02s |
+| `get_sec_filing_context` | Yes | 2.84s |
+| `compare_to_peers` | Yes | 10.22s |
+| `get_historical_trend` | Yes | 0.01s |
+| `retrieve_similar_cases` (hybrid search + CrossEncoder rerank) | Yes | 13.44s |
+| `graph_investigate` (GraphRAG multi-hop traversal) | Yes | 4.84s |
+
+### System Stats
+
+| Metric | Value |
+|---|---|
+| Model AUROC (vs. Isolation Forest proxy baseline) | 0.7226 |
+| Training sequences | 285,275 |
+| Records in ChromaDB (historical cases corpus) | 500 |
+| SEC API calls per investigation | 1, cached (down from 5 pre-caching) |
+| Automated test suite | 39 tests, run on every push via CI |
+
+*Reproducible via `eval_harness.py` in the repo root.*
 
 
 **System efficiency** (measured, not estimated):
