@@ -237,6 +237,7 @@ Each tool called directly, independent of agent decision-making:
 *Reproducible via `eval_harness.py` in the repo root.*
 
 
+
 **System efficiency** (measured, not estimated):
 
 | Metric | Value |
