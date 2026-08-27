@@ -34,19 +34,27 @@ chroma_client = chromadb.PersistentClient(path="data/chromadb")
 ef = DefaultEmbeddingFunction()
 collection = chroma_client.get_or_create_collection(name="anomalies", embedding_function=ef)
 
-RAG_CORPUS_SIZE = 5000  # how many historical rows to load into the vector store
+RAG_INGEST_TARGET = 5000  # real rows from anomaly_results.csv (285k+ available)
 
-df = pd.read_csv("data/anomaly_results.csv").dropna(subset=["company", "tag", "anomaly_score"]).head(RAG_CORPUS_SIZE)
+df = pd.read_csv("data/anomaly_results.csv").dropna(subset=["company", "tag", "anomaly_score"]).head(RAG_INGEST_TARGET)
 docs, metas, ids = [], [], []
 for i, row in df.iterrows():
     docs.append(f"Company: {row['company']} Metric: {row['tag']} Score: {row['anomaly_score']}")
     metas.append({"company": str(row["company"]), "tag": str(row["tag"])})
     ids.append(str(i))
 
-if collection.count() == 0:
-    print("Ingesting...")
-    collection.add(documents=docs, metadatas=metas, ids=ids)
-    print(f"Done - {len(docs)} records")
+# Top up rather than skip: if a persisted collection already exists from a
+# previous run with fewer records, this adds the missing ones instead of
+# silently no-op'ing (that was the bug — count() > 0 always skipped ingestion,
+# so a stale 500-record collection never grew even after this file changed).
+existing_count = collection.count()
+if existing_count < len(docs):
+    missing = slice(existing_count, len(docs))
+    print(f"Ingesting {len(docs) - existing_count} new records ({existing_count} already present)...")
+    collection.add(documents=docs[missing], metadatas=metas[missing], ids=ids[missing])
+    print(f"Done - {collection.count()} total records")
+else:
+    print(f"Chroma already has {existing_count} records (>= target {len(docs)}), skipping ingestion")
 
 advanced_retrieval.build_bm25_index(docs, metas)
 

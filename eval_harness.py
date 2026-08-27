@@ -25,6 +25,7 @@ from app.services.rag_agent import (
     tool_compare_to_peers, tool_get_historical_trend,
     tool_retrieve_similar_cases, tool_graph_investigate,
 )
+from app.services import advanced_retrieval
 
 # ---- Test cases: adjust/add real CIKs you want to evaluate ----
 # tag choices should match DEFAULT_METRIC_BASKET tags for realistic runs.
@@ -90,6 +91,21 @@ def run_direct_tool_exercise():
             results[name] = {"success": False, "latency_s": round(time.time() - start, 2), "note": str(e)}
 
     return results
+
+
+def print_rerank_scores(cid, tag):
+    """Shows the actual CrossEncoder rerank scores hidden inside
+    retrieve_similar_cases, so reranking is visible, not just trusted."""
+    query = f"Tesla {tag}"
+    candidates = advanced_retrieval.hybrid_search(collection, query, tag=tag, top_k=10)
+    ranked = advanced_retrieval.rerank(query, candidates, top_n=5)
+
+    print("\n" + "=" * 60)
+    print("RERANK SCORES (Advanced RAG detail)")
+    print("=" * 60)
+    print(f"Candidates before rerank: {len(candidates)}")
+    for c in ranked:
+        print(f"  {c['rerank_score']:.3f}  {c['doc']}")
 
 
 def print_direct_tool_report(results):
@@ -190,3 +206,5 @@ if __name__ == "__main__":
 
     direct_results = run_direct_tool_exercise()
     print_direct_tool_report(direct_results)
+
+    print_rerank_scores(DIRECT_TOOL_TEST_CASE["company_id"], DIRECT_TOOL_TEST_CASE["tag"])
