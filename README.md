@@ -20,7 +20,13 @@ That decision-making is the actual "agentic" part: the agent isn't following a f
 ## Architecture
 
 ```
-SEC EDGAR companyfacts API (live, per-request, no API key)
+SEC EDGAR APIs (live, per-request, no API key)
+  - companyfacts (structured financial data)
+  - full-text search (real filing text + industry/SIC lookup)
+         │
+         ▼
+  In-memory TTL cache (15 min) ── same company across multiple
+                                   tags/tools hits SEC once, not N times
          │
          ▼
   Sequence builder ── window-bounded to match training shape,
@@ -34,22 +40,33 @@ SEC EDGAR companyfacts API (live, per-request, no API key)
                   (p90 = 0.087, p95 = 0.105, from 285,275 sequences)
          │
          ▼
-  Tool-Calling Agent (Llama 3.3 via Groq)
-  ┌────────────────────────────────────────────────────┐
-  │  agent decides which tool to call next, and when    │
-  │  it has enough evidence to stop:                    │
-  │                                                      │
-  │  score_company_metric  → always called first         │
-  │  retrieve_similar_cases → check historical precedent │
-  │  deep_search           → only if evidence is weak     │
-  │  conclude              → ends the investigation       │
-  └────────────────────────────────────────────────────┘
+  Tool-Calling Agent (Groq-hosted LLM, configurable model)
+  ┌──────────────────────────────────────────────────────────┐
+  │  agent decides which tool to call next, and when          │
+  │  it has enough evidence to stop:                          │
+  │                                                            │
+  │  score_company_metric    → always called first             │
+  │  get_anomalous_metrics   → which metrics drive the anomaly │
+  │  get_sec_filing_context  → real evidence from 10-K/10-Q    │
+  │  compare_to_peers        → same-industry comparison         │
+  │  get_historical_trend    → sudden spike vs gradual drift    │
+  │  retrieve_similar_cases  → historical precedent (see below) │
+  │  graph_investigate       → optional multi-hop connections   │
+  │  conclude                → ends the investigation           │
+  └──────────────────────────────────────────────────────────┘
          │
          ▼
-  RAG (ChromaDB, local persistent store, sentence-transformer embeddings)
+  Advanced RAG ── metadata filtering (same metric tag) →
+                  hybrid search (Chroma semantic + BM25 keyword) →
+                  CrossEncoder reranking → top-N to the LLM
          │
          ▼
-  FastAPI (/analyze, /predictions, /health)
+  GraphRAG (networkx, in-memory) ── deterministic edges from the
+                  tools above + one cached LLM extraction per unique
+                  filing excerpt → multi-hop traversal
+         │
+         ▼
+  FastAPI (/analyze [API-key + rate-limited], /health, /cache-stats)
          │
          ▼
   SQLite ── every prediction persisted for audit history
