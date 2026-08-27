@@ -1,19 +1,21 @@
 # Financial Anomaly Detection
 
-> An agentic AI system for financial anomaly investigation — a live tool-calling LLM agent orchestrating a trained deep learning model against real-time SEC filing data.
+This is an AI system, not just a model: a tool-calling LLM agent (Groq-hosted, currently openai/gpt-oss-120b) that investigates a company's SEC filings in real time, deciding for itself which of 6 tools to call, in what order, and when it has enough evidence to conclude.
 
-## What It Does
+At the core of the agent's toolset is a Variational Autoencoder, trained offline on 285,000+ real financial sequences from SEC EDGAR, which learned what "normal" financial reporting looks like for a given metric. No labeled fraud dataset exists for SEC filings — the model has to learn structure from the data itself, and anything it reconstructs poorly gets flagged as statistically unusual.
 
-This is an AI system, not just a model: a tool-calling LLM agent (Llama 3.3 via Groq) that investigates a company's SEC filings in real time, deciding for itself which evidence to gather and when it has enough to conclude.
+The deployed API wires all of this together live, not from a cache. Given a company's SEC CIK and a financial metric (e.g. Assets, NetIncomeLoss), the agent can:
 
-At the core of the agent's toolset is a Variational Autoencoder, trained offline on 22 million rows of real SEC EDGAR filings across 6 quarters (2024Q4–2026Q1), which learned what "normal" financial reporting looks like for a given metric. No labeled fraud dataset exists for SEC filings — the model has to learn structure from the data itself, and anything it reconstructs poorly gets flagged as statistically unusual.
+Score the metric with a real VAE forward pass on live SEC EDGAR data
+Rank which specific metrics are driving an anomaly (get_anomalous_metrics)
+Pull real supporting text from the company's actual 10-K/10-Q filings (get_sec_filing_context)
+Compare the company against sector peers using the same VAE (compare_to_peers)
+Distinguish a sudden one-time spike from gradual drift (get_historical_trend)
+Check for multi-hop connections — shared subsidiaries, related entities — via a small knowledge graph (graph_investigate)
 
-The deployed API wires all of this together live, not from a cache. Given a company's SEC CIK and a financial metric (e.g. `Assets`, `NetIncomeLoss`), the agent:
-1. Calls a tool that pulls the company's real, current filing history from the SEC EDGAR `companyfacts` API and runs it through the trained VAE for a real forward pass
-2. Decides — on its own, per investigation — whether to pull historical precedent from a vector store, search for broader risk patterns, or conclude
-3. Produces a final risk assessment with a full trace of which tools it called and why
+Retrieval itself isn't blind top-k search: candidates are metadata-filtered, combined from semantic + keyword (BM25) search, then reranked with a CrossEncoder before reaching the LLM.
 
-That decision-making is the actual "agentic" part: the agent isn't following a fixed script. Across test runs, it called a different number of tools depending on how strong the initial evidence was — 2 tools when the signal was clearly low-risk, 3 when it wasn't.
+That decision-making is the actual "agentic" part: the agent isn't following a fixed script — it calls a different number and combination of tools per investigation, based on how strong the evidence looks at each step.
 
 ## Architecture
 
