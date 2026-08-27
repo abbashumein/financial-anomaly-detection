@@ -190,6 +190,27 @@ There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare
 - **Free-tier Groq rate limits apply.** Heavy usage could hit Groq's free-tier request limits; there's no fallback LLM provider configured.
 - **Investigation latency.** A full multi-tool investigation (score → rank → filing search → peers → trend → graph) can take 10-30+ seconds depending on how many tools the agent chooses to call — there's no streaming response yet.
 
+## Performance
+
+**Model calibration** (against 285,275 real training sequences):
+| Metric | Value |
+|---|---|
+| AUROC (vs. Isolation Forest proxy baseline) | 0.7226 |
+| p50 (typical reconstruction error) | 0.0438 |
+| p90 threshold | 0.0867 |
+| p95 (anomaly threshold) | 0.1052 |
+
+
+**System efficiency** (measured, not estimated):
+
+| Metric | Value |
+|---|---|
+| SEC API calls per company investigation | 1, cached — down from 5 (one per metric) before caching was added |
+| Test suite size | 39 tests |
+| Test suite runtime | ~7-30s (varies with cold-start model loading) |
+| CI | Runs full suite on every push via GitHub Actions |
+
+**Note:** there is no precision/recall/F1 reported here, because there's no labeled ground-truth fraud dataset to compute them against (see Known Limitations) — AUROC against a proxy baseline is the honest number available for this kind of unsupervised problem.
 
 
 ## Engineering Challenges & How They Were Solved
