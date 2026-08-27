@@ -198,18 +198,18 @@ There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare
 
 Conflating these two would overclaim — an agent that correctly stays shallow on a low-risk company is behaving *correctly*, not incompletely.
 
-### Agent Behavior (6 real companies, live SEC data)
+### Agent Behavior (16 real companies, live SEC data)
 
 | Metric | Value |
 |---|---|
-| Test cases run | 6 |
-| Success rate (no crash) | 6/6 (100%) |
-| Grounded responses (cites a real number) | 4/6 (66%) |
-| p50 latency | 19.4s |
-| p95 latency | 28.6s |
-| Tool call distribution | `score_company_metric`: 6/6 |
+| Test cases run | 16 |
+| Success rate (no crash) | 16/16 (100%) |
+| Grounded responses (cites a real number) | 7/16 (43%) |
+| p50 latency | 6.92s |
+| p95 latency | 19.0s |
+| Tool call distribution | `score_company_metric`: 16/16 |
 
-All 6 test companies (Tesla, Apple, Microsoft, Transglobal Management Group) scored LOW risk on the most recent 6-quarter window, so the agent correctly called only `score_company_metric` and concluded — deeper tools are gated behind a MEDIUM/HIGH score by design, to avoid unnecessary LLM calls and cost on companies that don't need investigation.
+All 16 test companies (large-cap: Tesla, Apple, Microsoft, Alphabet, Amazon, Nvidia; small-cap: Transglobal Management Group, Cardiff Lexington Corp, GivBux) scored LOW risk on the most recent 6-quarter window, so the agent correctly called only `score_company_metric` and concluded — deeper tools are gated behind a MEDIUM/HIGH score by design, to avoid unnecessary LLM calls and cost on companies that don't need investigation.
 
 ### Direct Tool Exercise (proves every component works)
 
@@ -217,12 +217,24 @@ Each tool called directly, independent of agent decision-making:
 
 | Tool | Works | Latency |
 |---|---|---|
-| `get_anomalous_metrics` | Yes | 0.02s |
-| `get_sec_filing_context` | Yes | 2.84s |
-| `compare_to_peers` | Yes | 10.22s |
-| `get_historical_trend` | Yes | 0.01s |
-| `retrieve_similar_cases` (hybrid search + CrossEncoder rerank) | Yes | 13.44s |
-| `graph_investigate` (GraphRAG multi-hop traversal) | Yes | 4.84s |
+| `get_anomalous_metrics` | Yes | 0.01s |
+| `get_sec_filing_context` | Yes | 2.4s |
+| `compare_to_peers` | Yes | 9.35s |
+| `get_historical_trend` | Yes | 0.0s |
+| `retrieve_similar_cases` (hybrid search + CrossEncoder rerank) | Yes | 11.21s |
+| `graph_investigate` (GraphRAG multi-hop traversal) | Yes | 2.05s |
+
+**Rerank scores (Advanced RAG detail)** — CrossEncoder scores each (query, candidate) pair together rather than comparing independent embeddings; 20 hybrid candidates narrowed to top 5:
+
+| Rerank Score | Candidate |
+|---|---|
+| -5.140 | LI AUTO INC. — Assets — anomaly score 0.0311 |
+| -5.825 | IDENTIV, INC. — Assets — anomaly score 0.0764 |
+| -5.853 | SILYNXCOM LTD. — Assets — anomaly score 0.0485 |
+| -5.976 | CAVCO INDUSTRIES INC. — Assets — anomaly score 0.0428 |
+| -6.093 | SINTX TECHNOLOGIES, INC. — Assets — anomaly score 0.0596 |
+
+*(Negative scores are normal for this CrossEncoder model — relative ranking is what matters, not the sign.)*
 
 ### System Stats
 
@@ -230,7 +242,7 @@ Each tool called directly, independent of agent decision-making:
 |---|---|
 | Model AUROC (vs. Isolation Forest proxy baseline) | 0.7226 |
 | Training sequences | 285,275 |
-| Records in ChromaDB (historical cases corpus) | 500 |
+| Records in ChromaDB (historical cases corpus) | 5,000 |
 | SEC API calls per investigation | 1, cached (down from 5 pre-caching) |
 | Automated test suite | 39 tests, run on every push via CI |
 
