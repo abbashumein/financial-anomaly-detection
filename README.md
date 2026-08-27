@@ -178,6 +178,20 @@ There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare
 - **Production-adjacent engineering**: 39 automated tests, CI that runs them on every push, pinned dependencies, API auth + rate limiting, caching, and a working frontend — not just a notebook
 
 
+## Known Limitations
+
+- **No labeled fraud ground truth.** The VAE flags statistical deviation from normal patterns, not confirmed fraud — a HIGH score means "unusual," not "fraudulent." There's no dataset of confirmed SEC fraud cases to validate detection accuracy against.
+- **Moderate AUROC (0.72)** against a proxy Isolation Forest baseline, not a true fraud label — disclosed here rather than hidden, since it's a realistic number for an unsupervised approach on this kind of data.
+- **Not horizontally scalable as-is.** The cache and knowledge graph are in-memory and per-process — they reset on restart and aren't shared across multiple server instances. Fine for a single-process portfolio deployment; would need Redis + a real graph database for multi-instance production use.
+- **First-request latency.** The CrossEncoder reranker and BM25 index both build/download on first use, adding a few seconds to the very first investigation after startup. Subsequent requests are fast.
+- **Peer discovery depends on SEC's full-text search matching well.** `compare_to_peers` finds companies in the same industry (SIC code) that also mention the relevant financial term — it can occasionally miss true peers or surface a loose match if the search term is too generic.
+- **Single shared API key, no per-user accounts.** Auth is a single `X-API-Key` check, appropriate for a portfolio demo but not multi-tenant production use.
+- **SQLite, not a production database.** Fine for single-instance prediction logging; would need Postgres or similar under real concurrent write load.
+- **Free-tier Groq rate limits apply.** Heavy usage could hit Groq's free-tier request limits; there's no fallback LLM provider configured.
+- **Investigation latency.** A full multi-tool investigation (score → rank → filing search → peers → trend → graph) can take 10-30+ seconds depending on how many tools the agent chooses to call — there's no streaming response yet.
+
+
+
 ## Engineering Challenges & How They Were Solved
 
 
