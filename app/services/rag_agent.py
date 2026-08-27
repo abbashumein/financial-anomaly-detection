@@ -34,7 +34,9 @@ chroma_client = chromadb.PersistentClient(path="data/chromadb")
 ef = DefaultEmbeddingFunction()
 collection = chroma_client.get_or_create_collection(name="anomalies", embedding_function=ef)
 
-df = pd.read_csv("data/anomaly_results.csv").dropna(subset=["company", "tag", "anomaly_score"]).head(500)
+RAG_CORPUS_SIZE = 5000  # how many historical rows to load into the vector store
+
+df = pd.read_csv("data/anomaly_results.csv").dropna(subset=["company", "tag", "anomaly_score"]).head(RAG_CORPUS_SIZE)
 docs, metas, ids = [], [], []
 for i, row in df.iterrows():
     docs.append(f"Company: {row['company']} Metric: {row['tag']} Score: {row['anomaly_score']}")

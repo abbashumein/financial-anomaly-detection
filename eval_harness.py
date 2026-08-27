@@ -30,19 +30,25 @@ from app.services.rag_agent import (
 # tag choices should match DEFAULT_METRIC_BASKET tags for realistic runs.
 TEST_CASES = [
     # Large-cap, stable companies - expect LOW risk, agent should stop early
-    {"company_id": "0001318605", "tag": "Assets", "label": "Tesla - large-cap, expect LOW risk"},
-    {"company_id": "0000320193", "tag": "Assets", "label": "Apple - large-cap, expect LOW risk"},
+    {"company_id": "0001318605", "tag": "Assets", "label": "Tesla - Assets"},
+    {"company_id": "0001318605", "tag": "Liabilities", "label": "Tesla - Liabilities"},
     {"company_id": "0001318605", "tag": "NetIncomeLoss", "label": "Tesla - NetIncomeLoss"},
+    {"company_id": "0000320193", "tag": "Assets", "label": "Apple - Assets"},
+    {"company_id": "0000320193", "tag": "Revenues", "label": "Apple - Revenues"},
     {"company_id": "0000789019", "tag": "Revenues", "label": "Microsoft - Revenues"},
+    {"company_id": "0000789019", "tag": "Assets", "label": "Microsoft - Assets"},
+    {"company_id": "0001652044", "tag": "Assets", "label": "Alphabet - Assets"},
+    {"company_id": "0001018724", "tag": "Revenues", "label": "Amazon - Revenues"},
+    {"company_id": "0001045810", "tag": "NetIncomeLoss", "label": "Nvidia - NetIncomeLoss"},
 
     # Small-cap / previously-flagged companies - more likely to trigger
-    # MEDIUM/HIGH risk and exercise the deeper tools (get_anomalous_metrics,
-    # get_sec_filing_context, compare_to_peers, get_historical_trend).
-    # CIK confirmed via real SEC filing URL.
+    # MEDIUM/HIGH risk. CIKs confirmed via real SEC filing text.
     {"company_id": "0001434601", "tag": "Assets", "label": "Transglobal Mgmt Group (fka Marquie Group) - Assets"},
     {"company_id": "0001434601", "tag": "Liabilities", "label": "Transglobal Mgmt Group (fka Marquie Group) - Liabilities"},
-    # Add Cardiff Lexington Corp and GivBux Inc CIKs here once looked up -
-    # both already flagged in your findings table, good HIGH-risk candidates.
+    {"company_id": "0000811222", "tag": "Assets", "label": "Cardiff Lexington Corp - Assets"},
+    {"company_id": "0000811222", "tag": "Liabilities", "label": "Cardiff Lexington Corp - Liabilities"},
+    {"company_id": "0001169138", "tag": "Assets", "label": "GivBux Inc - Assets"},
+    {"company_id": "0001169138", "tag": "NetIncomeLoss", "label": "GivBux Inc - NetIncomeLoss"},
 ]
 
 
