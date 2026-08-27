@@ -110,17 +110,24 @@ Being upfront about these rather than glossing over them, because they're the ki
 | Layer | Tool |
 |---|---|
 | Agent orchestration | Hand-rolled tool-calling loop (Groq function-calling API) |
-| LLM | Llama 3.3 via Groq |
+| LLM | Groq-hosted (configurable via `GROQ_MODEL`, default `openai/gpt-oss-120b`) |
 | Deep learning model | PyTorch VAE |
-| Live data source | SEC EDGAR `companyfacts` API (public, free, no key) |
+| Live data source | SEC EDGAR `companyfacts` API + full-text search API (public, free, no key) |
 | Vector database | ChromaDB (local persistent store) |
 | Embeddings | Sentence-transformer (ChromaDB default, ONNX MiniLM) |
+| Keyword search | BM25 (`rank_bm25`) — combined with embeddings for hybrid retrieval |
+| Reranking | CrossEncoder (`sentence-transformers`, `ms-marco-MiniLM-L-6-v2`) |
+| Knowledge graph | NetworkX (in-memory) — multi-hop entity/relationship traversal |
 | Data processing (offline) | Polars |
 | Baseline comparison (offline) | scikit-learn Isolation Forest |
 | API | FastAPI + Pydantic |
+| Auth & rate limiting | Custom API-key dependency + SlowAPI |
+| Caching | In-memory TTL cache (SEC API calls) |
 | Database | SQLite |
+| Frontend | Streamlit |
+| Testing | pytest (39 tests — unit, integration, regression) |
 | Containerization | Docker |
-| CI/CD | GitHub Actions |
+| CI/CD | GitHub Actions (runs full test suite on every push) |
 | Config | pydantic-settings + `.env` |
 
 ## Project Structure
@@ -128,17 +135,30 @@ Being upfront about these rather than glossing over them, because they're the ki
 ```
 financial-anomaly-detection/
 ├── app/
-│   ├── api/main.py            # FastAPI endpoints
-│   ├── config/settings.py     # pydantic-settings, reads .env
-│   ├── database/db.py         # SQLite — stores all predictions
-│   ├── models/vae.py          # VAE architecture + load function
+│   ├── api/main.py                 # FastAPI endpoints (auth + rate-limited)
+│   ├── config/settings.py          # pydantic-settings, reads .env
+│   ├── core/security.py            # API-key auth dependency
+│   ├── database/db.py              # SQLite — stores all predictions
+│   ├── models/vae.py               # VAE architecture + load function
 │   └── services/
-│       ├── edgar_client.py    # live SEC EDGAR fetch + sequence builder
-│       ├── vae_scorer.py      # loads trained weights, runs live scoring
-│       └── rag_agent.py       # tool-calling agent + ChromaDB retrieval
-├── anomaly_detection.ipynb    # offline training notebook
+│       ├── edgar_client.py         # live SEC EDGAR fetch + sequence builder
+│       ├── vae_scorer.py           # loads trained weights, runs live scoring
+│       ├── cache.py                # in-memory TTL cache for SEC API calls
+│       ├── sec_filing_search.py    # real 10-K/10-Q filing text search
+│       ├── peer_comparison.py      # industry (SIC) peer lookup + scoring
+│       ├── advanced_retrieval.py   # metadata filter + hybrid search + rerank
+│       ├── graph_rag.py            # in-memory knowledge graph, multi-hop
+│       └── rag_agent.py            # tool-calling agent (6 tools) + retrieval
+├── tests/                          # 39 tests: unit, integration, regression
+│   ├── conftest.py
+│   ├── _stubs/                     # lightweight fallbacks if heavy deps absent
+│   └── test_*.py
+├── app.py                          # Streamlit frontend
+├── anomaly_detection.ipynb         # offline training notebook
+├── .github/workflows/deploy.yml    # CI — runs tests on every push
+├── .env.example
 ├── Dockerfile
-├── requirements.txt
+├── requirements.txt                # pinned versions
 └── .gitignore
 ```
 
