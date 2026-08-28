@@ -189,6 +189,8 @@ There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare
 - **SQLite, not a production database.** Fine for single-instance prediction logging; would need Postgres or similar under real concurrent write load.
 - **Free-tier Groq rate limits apply.** Heavy usage could hit Groq's free-tier request limits; there's no fallback LLM provider configured.
 - **Investigation latency.** A full multi-tool investigation (score → rank → filing search → peers → trend → graph) can take 10-30+ seconds depending on how many tools the agent chooses to call — there's no streaming response yet.
+- **Agent can loop inefficiently.** In eval testing, one investigation called `score_company_metric` 4 times before concluding instead of progressing to other tools — correct final result, but an inefficient path. Not currently prevented by the agent loop's own logic.
+- **Corpus rebuild only happens on an empty database.** The historical-cases vector store is only populated the first time it's built; increasing `RAG_CORPUS_SIZE` requires deleting the persistent ChromaDB folder to see the change take effect on an existing installation.
 
 ## Performance Metrics
 
@@ -210,6 +212,7 @@ Conflating these two would overclaim — an agent that correctly stays shallow o
 | Tool call distribution | `score_company_metric`: 16/16 |
 
 All 16 test companies (large-cap: Tesla, Apple, Microsoft, Alphabet, Amazon, Nvidia; small-cap: Transglobal Management Group, Cardiff Lexington Corp, GivBux) scored LOW risk on the most recent 6-quarter window, so the agent correctly called only `score_company_metric` and concluded — deeper tools are gated behind a MEDIUM/HIGH score by design, to avoid unnecessary LLM calls and cost on companies that don't need investigation.
+
 
 ### Direct Tool Exercise (proves every component works)
 
@@ -270,7 +273,7 @@ Each tool called directly, independent of agent decision-making:
 | **Distribution mismatch** | Live inference pulled a company's *full* filing history, but the VAE was trained on short, fixed-length windows — scores were meaningless | Rebuilt the sequence pipeline to window live data to match the exact shape the model was trained on |
 | **Repeated SEC API calls** | Investigating one company across 5 metrics triggered 5 separate SEC API calls for the same underlying data | Added a 15-minute in-memory TTL cache on the network layer — same company now costs 1 API call, not 5 |
 | **Blind retrieval** | The original RAG only did plain semantic similarity search — no filtering, so a Revenue anomaly could get compared against unrelated Liabilities cases | Rebuilt as a 3-stage pipeline: metadata filtering → hybrid (semantic + BM25 keyword) search → CrossEncoder reranking |
-| **Silent test-suite gap** | The historical-cases index only got built the *first* time the app ran (empty-database check) — meant it silently didn't exist on every subsequent run | Refactored so the index always builds from the full dataset, regardless of whether ingestion already happened |
+| **Silent test-suite gap** | The BM25 keyword index only got built the *first* time the app ran (it depended on data only loaded inside an empty-database check) — meant it silently didn't exist on every subsequent run | Refactored so the BM25 index always builds from the full loaded dataset, independent of whether ChromaDB ingestion already happened. (Note: ChromaDB's own vector store still only populates once — see Known Limitations.) |
 | **Model deprecation, mid-project** | Groq deprecated `llama-3.3-70b-versatile` during development — the agent returned 404s with no warning | Replaced the hardcoded model name with a `GROQ_MODEL` setting, so future deprecations are a one-line `.env` change, not a code hunt |
 | **API protocol mismatch after model swap** | The new model rejected conversation turns where a prior assistant message had `"tool_calls": null` — Groq's stricter validation caught what the old model silently tolerated | Fixed message construction to omit the `tool_calls` key entirely when the LLM has no tool call, instead of setting it to `null` |
 | **Order-dependent test failures** | Auth tests passed alone but failed in the full suite — a different test file imported the settings module first, locking in an empty API key before the auth test could set it | Moved required test environment variables into `conftest.py`, which always runs before test collection, regardless of file order |
