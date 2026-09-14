@@ -15,9 +15,9 @@ from app.models.vae import VAE
 
 # Calibrated from data/anomaly_results.csv (n=285,275), computed once:
 # p50=0.0438, p90=0.0867, p95=0.1052, p99=0.1548, max=0.6790
-P50 = 0.043787673
-P90 = 0.0867166
-P95 = 0.10522487
+P50 = 0.04355211
+P90 = 0.08699422
+P95 = 0.1056
 
 _model = None
 _lock = threading.Lock()
