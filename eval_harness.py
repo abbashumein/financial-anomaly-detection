@@ -129,10 +129,17 @@ def print_direct_tool_report(results):
 
 
 def run_eval():
+    import sys
+    filter_text = sys.argv[1] if len(sys.argv) > 1 else None
+    cases = TEST_CASES
+    if filter_text:
+        cases = [c for c in TEST_CASES if filter_text.lower() in c["label"].lower()]
+        print(f"Filtering to {len(cases)} case(s) matching '{filter_text}'")
+
     results = []
     tool_call_counts = {}
 
-    for case in TEST_CASES:
+    for case in cases:
         print(f"Running: {case['label']} ({case['company_id']}, {case['tag']})...")
         start = time.time()
         try:

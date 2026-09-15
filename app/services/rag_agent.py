@@ -566,6 +566,7 @@ def analyze_company(company_id: str, tag: str, ticker: str = None) -> dict:
 
     trace = []  # for transparency/debugging - which tools got called, in what order
     score_data = None
+    failed_calls = {}  # (tool_name, args_json) -> consecutive failure count
 
     for step in range(MAX_AGENT_STEPS):
         response = groq_client.chat.completions.create(
@@ -613,6 +614,26 @@ def analyze_company(company_id: str, tag: str, ticker: str = None) -> dict:
 
             if fn_name == "score_company_metric" and "error" not in result:
                 score_data = result
+
+            # Stop the agent from blindly retrying an identical failing call
+            # (was the actual cause of the Amazon-Revenues UNKNOWN result -
+            # it retried the same errored call 6x instead of trying
+            # something else or conclude()-ing with an honest "no data".)
+            call_key = (fn_name, call.function.arguments)
+            if isinstance(result, dict) and "error" in result:
+                failed_calls[call_key] = failed_calls.get(call_key, 0) + 1
+                if failed_calls[call_key] >= 2:
+                    result = {
+                        **result,
+                        "note": (
+                            f"This exact call has failed {failed_calls[call_key]}x. "
+                            "Do NOT retry it again. Either try a different tool/tag, "
+                            "or call conclude with risk_level='UNKNOWN' and explain "
+                            "the data was unavailable for this metric."
+                        ),
+                    }
+            else:
+                failed_calls.pop(call_key, None)
 
             messages.append({
                 "role": "tool",
