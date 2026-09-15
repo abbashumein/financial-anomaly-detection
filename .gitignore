@@ -4,7 +4,8 @@
 *.parquet
 __pycache__/
 .ipynb_checkpoints/
-data/
+data/*
+!data/anomaly_results.csv
 models/*
 !models/vae_model.pt
 .idea/

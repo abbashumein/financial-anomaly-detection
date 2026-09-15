@@ -50,6 +50,15 @@ TEST_CASES = [
     {"company_id": "0000811222", "tag": "Liabilities", "label": "Cardiff Lexington Corp - Liabilities"},
     {"company_id": "0001169138", "tag": "Assets", "label": "GivBux Inc - Assets"},
     {"company_id": "0001169138", "tag": "NetIncomeLoss", "label": "GivBux Inc - NetIncomeLoss"},
+
+    # Additional large-caps + new metrics on existing companies (CIKs
+    # verified against SEC EDGAR directly, not guessed)
+    {"company_id": "0001326801", "tag": "Assets", "label": "Meta Platforms - Assets"},
+    {"company_id": "0001326801", "tag": "Revenues", "label": "Meta Platforms - Revenues"},
+    {"company_id": "0000019617", "tag": "Assets", "label": "JPMorgan Chase - Assets"},
+    {"company_id": "0001067983", "tag": "Assets", "label": "Berkshire Hathaway - Assets"},
+    {"company_id": "0000320193", "tag": "NetIncomeLoss", "label": "Apple - NetIncomeLoss"},
+    {"company_id": "0000789019", "tag": "NetIncomeLoss", "label": "Microsoft - NetIncomeLoss"},
 ]
 
 
