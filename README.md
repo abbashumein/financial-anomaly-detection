@@ -17,6 +17,7 @@ Retrieval itself isn't blind top-k search: candidates are metadata-filtered, com
 
 That decision-making is the actual "agentic" part: the agent isn't following a fixed script — it calls a different number and combination of tools per investigation, based on how strong the evidence looks at each step.
 
+
 ## Architecture
 
 ```
@@ -72,17 +73,22 @@ SEC EDGAR APIs (live, per-request, no API key)
   SQLite ── every prediction persisted for audit history
 ```
 
+
 ## Offline Model Training Results
 
 | Metric | Value |
 |---|---|
 | Dataset | SEC EDGAR bulk financial statement data, 6 quarters, 22M rows |
-| Sequences trained on | 285,275 |
+| Sequences trained on | 285,275 (80/20 train/val split) |
 | Anomalies flagged (p95 threshold) | 14,264 (5%) |
-| AUROC (vs. Isolation Forest as a weak proxy label) | 0.7226 |
+| Train/val loss | Converged close together (~67.2 vs ~67.5) — no overfitting signal |
+| Reconstruction error percentiles | p50: 0.0436 · p90: 0.0870 · p95: 0.1056 |
+| AUROC (vs. Isolation Forest as a weak proxy label) | 0.7185 |
 | VAE / Isolation Forest agreement | 94.7% |
 
 **Caveat on these numbers:** there's no ground-truth fraud label for SEC filings, so AUROC is measured against Isolation Forest's flags as a proxy, not verified fraud — a consistency check between two unsupervised methods, not a precision/recall claim.
+
+
 
 **Companies the offline model flagged during training:**
 
@@ -92,7 +98,8 @@ SEC EDGAR APIs (live, per-request, no API key)
 | Cardiff Lexington Corp | Discontinued ops EPS | Spike then collapse — consistent with a one-time divestiture gain |
 | GivBux, Inc. | Non-operating income/expense | Active for several quarters then drops to zero — income source disappeared |
 
-*(Note: re-querying live EDGAR for The Marquie Group's CIK now returns the entity name "Transglobal Management Group, Inc." — small-cap companies rename/restructure often; this may be the same legal entity under a new name, unconfirmed.)*
+*(Note: this company's CIK, 0001434601, filed under "MARQUIE GROUP, INC." in earlier quarters and "TRANSGLOBAL MANAGEMENT GROUP, INC." in later ones — same legal entity, confirmed via SEC EDGAR. Notably, every anomaly flag in the training data is tied to the earlier "Marquie" filings; filings under the current "Transglobal" name all score LOW — consistent with the restructuring signal settling down post-rename.)*
+
 
 ## Live Scoring: Design Decisions and Known Limitations
 
@@ -104,6 +111,8 @@ Being upfront about these rather than glossing over them, because they're the ki
 - **RAG corpus is a 500-record sample**, not the full 285,275-sequence set.
 - **Single-metric scoring per call** — the agent investigates one financial tag at a time, not a cross-metric picture.
 - **No reranking or query rewriting** in the RAG step — intentionally simple retrieval, not a hidden GraphRAG pipeline.
+
+
 
 ## Tech Stack
 
@@ -129,6 +138,7 @@ Being upfront about these rather than glossing over them, because they're the ki
 | Containerization | Docker |
 | CI/CD | GitHub Actions (runs full test suite on every push) |
 | Config | pydantic-settings + `.env` |
+
 
 ## Project Structure
 
@@ -162,6 +172,7 @@ financial-anomaly-detection/
 └── .gitignore
 ```
 
+
 ## Problem
 
 SEC filings are public, but nobody actually reads them at scale. Regulators, analysts, and auditors rely on humans manually flagging "this number looks weird" — a process that doesn't scale past a handful of companies and misses subtle statistical anomalies a human wouldn't catch by eye.
@@ -190,6 +201,7 @@ There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare
 - **Free-tier Groq rate limits apply.** Heavy usage could hit Groq's free-tier request limits; there's no fallback LLM provider configured.
 - **Investigation latency.** A full multi-tool investigation (score → rank → filing search → peers → trend → graph) can take 10-30+ seconds depending on how many tools the agent chooses to call — there's no streaming response yet.
 
+
 ## Performance Metrics
 
 **Two different things are measured below, and they answer different questions:**
@@ -198,18 +210,20 @@ There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare
 
 Conflating these two would overclaim — an agent that correctly stays shallow on a low-risk company is behaving *correctly*, not incompletely.
 
-### Agent Behavior (16 real companies, live SEC data)
+### Agent Behavior (22 real companies, live SEC data)
 
 | Metric | Value |
 |---|---|
-| Test cases run | 16 |
-| Success rate (no crash) | 16/16 (100%) |
-| Grounded responses (cites a real number) | 7/16 (43%) |
-| p50 latency | 6.92s |
-| p95 latency | 19.0s |
-| Tool call distribution | `score_company_metric`: 16/16 |
+| Test cases run | 22 |
+| Success rate (no crash) | 22/22 (100%) |
+| Grounded responses (cites a real number) | 10/22 (45%) |
+| p50 latency | 9.35s |
+| p95 latency | 17.75s |
+| Tool call distribution | `score_company_metric`: 24/24 |
 
-All 16 test companies (large-cap: Tesla, Apple, Microsoft, Alphabet, Amazon, Nvidia; small-cap: Transglobal Management Group, Cardiff Lexington Corp, GivBux) scored LOW risk on the most recent 6-quarter window, so the agent correctly called only `score_company_metric` and concluded — deeper tools are gated behind a MEDIUM/HIGH score by design, to avoid unnecessary LLM calls and cost on companies that don't need investigation.
+All 22 test companies (large-cap: Tesla, Apple, Microsoft, Alphabet, Amazon, Nvidia, Meta, JPMorgan Chase, Berkshire Hathaway; small-cap: Transglobal Management Group, Cardiff Lexington Corp, GivBux) scored LOW risk on the most recent 6-quarter window, so the agent correctly called only `score_company_metric` and concluded — deeper tools are gated behind a MEDIUM/HIGH score by design, to avoid unnecessary LLM calls and cost on companies that don't need investigation.
+
+
 
 ### Direct Tool Exercise (proves every component works)
 
@@ -224,24 +238,26 @@ Each tool called directly, independent of agent decision-making:
 | `retrieve_similar_cases` (hybrid search + CrossEncoder rerank) | Yes | 11.21s |
 | `graph_investigate` (GraphRAG multi-hop traversal) | Yes | 2.05s |
 
+
 **Rerank scores (Advanced RAG detail)** — CrossEncoder scores each (query, candidate) pair together rather than comparing independent embeddings; 20 hybrid candidates narrowed to top 5:
 
 | Rerank Score | Candidate |
 |---|---|
+| -4.936 | NN INC — Assets — anomaly score 0.0445 |
 | -5.140 | LI AUTO INC. — Assets — anomaly score 0.0311 |
-| -5.825 | IDENTIV, INC. — Assets — anomaly score 0.0764 |
-| -5.853 | SILYNXCOM LTD. — Assets — anomaly score 0.0485 |
+| -5.527 | DZS INC. — Assets — anomaly score 0.0310 |
 | -5.976 | CAVCO INDUSTRIES INC. — Assets — anomaly score 0.0428 |
 | -6.093 | SINTX TECHNOLOGIES, INC. — Assets — anomaly score 0.0596 |
 
 *(Negative scores are normal for this CrossEncoder model — relative ranking is what matters, not the sign.)*
 
+
 ### System Stats
 
 | Metric | Value |
 |---|---|
-| Model AUROC (vs. Isolation Forest proxy baseline) | 0.7226 |
-| Training sequences | 285,275 |
+| Model AUROC (vs. Isolation Forest proxy baseline) | 0.7185 |
+| Training sequences | 285,275 (80/20 train/val split) |
 | Records in ChromaDB (historical cases corpus) | 5,000 |
 | SEC API calls per investigation | 1, cached (down from 5 pre-caching) |
 | Automated test suite | 39 tests, run on every push via CI |
@@ -274,6 +290,9 @@ Each tool called directly, independent of agent decision-making:
 | **Model deprecation, mid-project** | Groq deprecated `llama-3.3-70b-versatile` during development — the agent returned 404s with no warning | Replaced the hardcoded model name with a `GROQ_MODEL` setting, so future deprecations are a one-line `.env` change, not a code hunt |
 | **API protocol mismatch after model swap** | The new model rejected conversation turns where a prior assistant message had `"tool_calls": null` — Groq's stricter validation caught what the old model silently tolerated | Fixed message construction to omit the `tool_calls` key entirely when the LLM has no tool call, instead of setting it to `null` |
 | **Order-dependent test failures** | Auth tests passed alone but failed in the full suite — a different test file imported the settings module first, locking in an empty API key before the auth test could set it | Moved required test environment variables into `conftest.py`, which always runs before test collection, regardless of file order |
+| **Agent stuck in a retry loop** | On certain companies, the agent's `score_company_metric` call failed (e.g. Amazon's Revenue tag not matching expected SEC XBRL naming), and the agent kept blindly retrying the identical failing call until it hit the step limit — returning an uninformative `UNKNOWN` risk instead of concluding | Added failure tracking per (tool, args) pair — after 2 identical failures, the agent is explicitly told to stop retrying and either try a different approach or conclude honestly with "data unavailable" |
+| **Retrieval corpus silently stuck at 500 records** | The ingestion check only tested `collection.count() == 0`, so once any data existed, re-running the ingestion script — even after raising the target row count — silently did nothing; the corpus never grew | Changed to a top-up check (`existing_count < target`) that ingests only the missing records, so raising the target actually takes effect on the next run |
+| **Data files silently excluded from git** | `.gitignore` blocked the entire `data/` folder with no exception, so `anomaly_results.csv` was regenerated locally after every retrain but never actually reached GitHub — commits appeared to succeed with nothing changed | Changed the ignore rule to `data/*` with an explicit `!data/anomaly_results.csv` exception, matching the pattern already used for `models/*` |
 
 
 ## Author
