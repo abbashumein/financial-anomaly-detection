@@ -172,27 +172,35 @@ financial-anomaly-detection/
 └── .gitignore
 ```
 
-
 ## Problem
 
-SEC filings are public, but nobody actually reads them at scale. Regulators, analysts, and auditors rely on humans manually flagging "this number looks weird" — a process that doesn't scale past a handful of companies and misses subtle statistical anomalies a human wouldn't catch by eye.
+SEC filings are public, but nobody actually reads them at scale. Every public company must file quarterly (10-Q) and annual (10-K) reports disclosing detailed financial data — assets, liabilities, revenue, income — but there are thousands of filers and only so many human analysts and regulators to review them. In practice, review is reactive: something gets flagged *after* a scandal breaks, a short-seller report goes viral, or a whistleblower comes forward — not because someone was systematically watching the numbers.
 
-There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare, disclosed inconsistently, and legally sensitive. So this project treats it as an unsupervised problem: learn what *normal* financial reporting looks like, and flag anything a trained model can't reconstruct well as statistically unusual — then have an AI agent investigate *why*, the way a human analyst would.
+Manual review also misses what statistics catch easily. A human skimming a balance sheet might not notice that a company's liabilities jumped 3x in one quarter with no explanation in the narrative text, especially across hundreds of filings. A model trained on what "normal" reporting looks like across thousands of companies can catch that instantly — not by understanding accounting, but by noticing the shape of the numbers doesn't match anything it's seen before.
+
+The harder problem: there's no labeled "fraud" dataset for SEC filings to train on. Confirmed fraud is rare, often disclosed years after the fact if at all, and legally sensitive to label. You can't train a classifier on "fraud vs. not fraud" when you don't reliably know which filings were fraudulent. So this project treats it as an unsupervised problem instead: learn what *normal* financial reporting looks like from real data, flag anything a trained model can't reconstruct well as statistically unusual, and then hand that flag to an AI agent to investigate *why* — pulling real evidence, checking context, and explaining its reasoning, the way a human analyst would if they actually had time to look at every company instead of just the ones that already made headlines.
 
 
 ## What This Achieves
 
-- A **real trained model** (VAE, not a heuristic) that scores live company data against a learned baseline of normal financial behavior
-- An **agent that investigates, not just scores** — given a flagged company, it autonomously decides whether to check which specific metric is driving the anomaly, pull real filing text as evidence, compare against industry peers, check if the change was sudden or gradual, and search for historical precedent — the same steps a human analyst would take, but decided by the LLM per-investigation, not hardcoded
-- **Advanced retrieval, not blind search** — metadata filtering, hybrid (semantic + keyword) search, and CrossEncoder reranking, so retrieved evidence is actually relevant, not just "closest by embedding"
-- **A small knowledge graph layer** enabling multi-hop questions flat retrieval can't answer, like "is this company connected to another flagged company through a shared subsidiary?"
-- **Production-adjacent engineering**: 39 automated tests, CI that runs them on every push, pinned dependencies, API auth + rate limiting, caching, and a working frontend — not just a notebook
+**A real trained model, not a heuristic.** Most "anomaly detection" demos use simple rules (threshold checks, z-scores on raw numbers). This uses a Variational Autoencoder trained on 285,275 real SEC EDGAR sequences across 6 quarters, learning the actual shape of normal financial reporting rather than a fixed cutoff. It's validated with a held-out 80/20 train/validation split — train and validation loss track closely together, confirming the model generalizes to data it hasn't seen rather than memorizing the training set.
+
+**An agent that investigates, not just scores.** A raw anomaly score tells you *that* something looks unusual, not *why* — and "why" is what an analyst actually needs to act on it. Given a flagged company, the agent autonomously chooses from 8 tools to build a case: identify which specific financial metric is driving the anomaly, pull real filing text as supporting evidence, compare the company against its industry peers (is this unusual for them, or normal for the whole sector right now?), check whether the change happened suddenly or built up gradually (a one-time write-off reads very differently from steady growth), search for historical precedent, and traverse a knowledge graph for less-obvious connections. Critically, this sequence isn't hardcoded — the LLM decides what evidence it needs per investigation, the same way a human analyst would follow leads rather than run a fixed checklist. It's also built to fail gracefully: if a tool call errors, the agent is explicitly redirected instead of retrying the same failing call until it times out.
+
+**Advanced retrieval, not blind search.** A plain semantic search can pull back superficially similar but actually irrelevant matches (comparing a Revenue anomaly against unrelated Liabilities cases, for instance). This pipeline filters by metadata first, runs hybrid semantic + BM25 keyword search over a 5,000-record historical corpus, then reranks with a CrossEncoder — so the evidence handed to the LLM is actually relevant, not just
+nearest-by-embedding.
+
+**A knowledge graph layer for connections flat retrieval can't see.** Text search alone can't answer "is this company linked to another flagged company through a shared subsidiary or executive?" The graph layer can — and it's not just theoretical: it correctly surfaced that Marquie Group, Inc., flagged as anomalous across several metrics, is the same legal entity now filing as Transglobal Management Group, Inc. after a rename — with the anomalies concentrated specifically in the pre-rename filings, consistent with a real restructuring event.
+
+**Evaluated on real data, not synthetic tests.** 22 real public and small-cap companies run end-to-end through the live agent — real SEC EDGAR calls, real Groq inference — plus a separate direct-tool exercise proving all 8 tools work independently of whether the agent chose to call them on a given input.
+
+**Production-adjacent engineering, not just a notebook.** 39 automated tests running in CI on every push, pinned dependencies, API auth and rate limiting, response caching, and a working frontend — the difference between a research prototype and something built to actually be deployed and maintained.
 
 
 ## Known Limitations
 
 - **No labeled fraud ground truth.** The VAE flags statistical deviation from normal patterns, not confirmed fraud — a HIGH score means "unusual," not "fraudulent." There's no dataset of confirmed SEC fraud cases to validate detection accuracy against.
-- **Moderate AUROC (0.72)** against a proxy Isolation Forest baseline, not a true fraud label — disclosed here rather than hidden, since it's a realistic number for an unsupervised approach on this kind of data.
+- **Moderate AUROC (0.7185)** against a proxy Isolation Forest baseline, not a true fraud label — disclosed here rather than hidden, since it's a realistic number for an unsupervised approach on this kind of data.
 - **Not horizontally scalable as-is.** The cache and knowledge graph are in-memory and per-process — they reset on restart and aren't shared across multiple server instances. Fine for a single-process portfolio deployment; would need Redis + a real graph database for multi-instance production use.
 - **First-request latency.** The CrossEncoder reranker and BM25 index both build/download on first use, adding a few seconds to the very first investigation after startup. Subsequent requests are fast.
 - **Peer discovery depends on SEC's full-text search matching well.** `compare_to_peers` finds companies in the same industry (SIC code) that also mention the relevant financial term — it can occasionally miss true peers or surface a loose match if the search term is too generic.
@@ -200,6 +208,7 @@ There's no labeled "fraud" dataset for SEC filings to train on — fraud is rare
 - **SQLite, not a production database.** Fine for single-instance prediction logging; would need Postgres or similar under real concurrent write load.
 - **Free-tier Groq rate limits apply.** Heavy usage could hit Groq's free-tier request limits; there's no fallback LLM provider configured.
 - **Investigation latency.** A full multi-tool investigation (score → rank → filing search → peers → trend → graph) can take 10-30+ seconds depending on how many tools the agent chooses to call — there's no streaming response yet.
+- **No data/concept drift monitoring.** The VAE is trained once on a fixed 6-quarter window; there's no automated check for whether live filings have started looking statistically different from that training window, or a retraining schedule — retraining is currently a manual process.
 
 
 ## Performance Metrics
@@ -232,11 +241,11 @@ Each tool called directly, independent of agent decision-making:
 | Tool | Works | Latency |
 |---|---|---|
 | `get_anomalous_metrics` | Yes | 0.01s |
-| `get_sec_filing_context` | Yes | 2.4s |
-| `compare_to_peers` | Yes | 9.35s |
+| `get_sec_filing_context` | Yes | 3.71s |
+| `compare_to_peers` | Yes | 12.21s |
 | `get_historical_trend` | Yes | 0.0s |
-| `retrieve_similar_cases` (hybrid search + CrossEncoder rerank) | Yes | 11.21s |
-| `graph_investigate` (GraphRAG multi-hop traversal) | Yes | 2.05s |
+| `retrieve_similar_cases` (hybrid search + CrossEncoder rerank) | Yes | 15.64s |
+| `graph_investigate` (GraphRAG multi-hop traversal) | Yes | 3.9s |
 
 
 **Rerank scores (Advanced RAG detail)** — CrossEncoder scores each (query, candidate) pair together rather than comparing independent embeddings; 20 hybrid candidates narrowed to top 5:
@@ -290,7 +299,7 @@ Each tool called directly, independent of agent decision-making:
 | **Model deprecation, mid-project** | Groq deprecated `llama-3.3-70b-versatile` during development — the agent returned 404s with no warning | Replaced the hardcoded model name with a `GROQ_MODEL` setting, so future deprecations are a one-line `.env` change, not a code hunt |
 | **API protocol mismatch after model swap** | The new model rejected conversation turns where a prior assistant message had `"tool_calls": null` — Groq's stricter validation caught what the old model silently tolerated | Fixed message construction to omit the `tool_calls` key entirely when the LLM has no tool call, instead of setting it to `null` |
 | **Order-dependent test failures** | Auth tests passed alone but failed in the full suite — a different test file imported the settings module first, locking in an empty API key before the auth test could set it | Moved required test environment variables into `conftest.py`, which always runs before test collection, regardless of file order |
-| **Agent stuck in a retry loop** | On certain companies, the agent's `score_company_metric` call failed (e.g. Amazon's Revenue tag not matching expected SEC XBRL naming), and the agent kept blindly retrying the identical failing call until it hit the step limit — returning an uninformative `UNKNOWN` risk instead of concluding | Added failure tracking per (tool, args) pair — after 2 identical failures, the agent is explicitly told to stop retrying and either try a different approach or conclude honestly with "data unavailable" |
+| **Agent stuck in a retry loop** | On certain companies, the agent's `score_company_metric` call failed (e.g. Amazon's Revenue tag not matching expected SEC XBRL naming), and the agent kept blindly retrying the identical failing call until it hit the step limit — returning an uninformative `UNKNOWN` risk instead of concluding | Added failure tracking per (tool, args) pair — after 2 identical failures, the agent is told to stop retrying and try something else or conclude honestly. Verified fix: Amazon went from 6 failed retries/`UNKNOWN` → resolves cleanly in 1 call |
 | **Retrieval corpus silently stuck at 500 records** | The ingestion check only tested `collection.count() == 0`, so once any data existed, re-running the ingestion script — even after raising the target row count — silently did nothing; the corpus never grew | Changed to a top-up check (`existing_count < target`) that ingests only the missing records, so raising the target actually takes effect on the next run |
 | **Data files silently excluded from git** | `.gitignore` blocked the entire `data/` folder with no exception, so `anomaly_results.csv` was regenerated locally after every retrain but never actually reached GitHub — commits appeared to succeed with nothing changed | Changed the ignore rule to `data/*` with an explicit `!data/anomaly_results.csv` exception, matching the pattern already used for `models/*` |
 
