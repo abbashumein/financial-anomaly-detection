@@ -529,6 +529,26 @@ DISPATCH = {
     "deep_search": lambda args: tool_deep_search(args["tag"]),
 }
 
+def run_tool(fn_name: str, args: dict) -> dict:
+    """Run one tool and ALWAYS return a dict, never raise.
+
+    The LLM chooses the tool arguments, so they can be missing or wrong
+    (for example no "tag"). Before this wrapper, that raised KeyError inside
+    the agent loop and /analyze returned a 500. Now the problem becomes an
+    {"error": ...} result: the LLM sees it, the repeated-failure guard in
+    analyze_company counts it, and the agent can fix the call or conclude.
+    """
+    tool_fn = DISPATCH.get(fn_name)
+    if tool_fn is None:
+        return {"error": f"unknown tool {fn_name}"}
+    try:
+        return tool_fn(args)
+    except KeyError as e:
+        return {"error": f"{fn_name} called with missing argument {e}"}
+    except Exception as e:
+        return {"error": f"{fn_name} failed: {type(e).__name__}: {e}"}
+
+
 SYSTEM_PROMPT = """You are an autonomous financial anomaly investigator.
 
 You have tools to score a company's real filing data with a trained VAE
@@ -609,8 +629,7 @@ def analyze_company(company_id: str, tag: str, ticker: str = None) -> dict:
                 }
 
             trace.append(fn_name)
-            tool_fn = DISPATCH.get(fn_name)
-            result = tool_fn(args) if tool_fn else {"error": f"unknown tool {fn_name}"}
+            result = run_tool(fn_name, args)
 
             if fn_name == "score_company_metric" and "error" not in result:
                 score_data = result

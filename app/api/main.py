@@ -57,7 +57,7 @@ class AnalyzeResponse(BaseModel):
 
 @app.post("/analyze", response_model=AnalyzeResponse, dependencies=[Depends(require_api_key)])
 @limiter.limit("10/minute")
-async def analyze(request: Request, req: AnalyzeRequest):
+def analyze(request: Request, req: AnalyzeRequest):
     """Run the live VAE-scoring + agentic RAG pipeline for a given company/tag."""
     try:
         result = analyze_company(req.company_id, req.tag, req.ticker)
