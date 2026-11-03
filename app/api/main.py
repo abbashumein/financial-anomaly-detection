@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
 import json
+import logging
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -62,7 +63,7 @@ def analyze(request: Request, req: AnalyzeRequest):
     try:
         result = analyze_company(req.company_id, req.tag, req.ticker)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.getLogger(__name__).exception("analyze failed"); raise HTTPException(status_code=500, detail="Internal error while analyzing.")
 
     score = result.get("score")
     raw = result.get("raw_score_data") or {}
