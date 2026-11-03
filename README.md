@@ -83,10 +83,10 @@ SEC EDGAR APIs (live, per-request, no API key)
 | Anomalies flagged (p95 threshold) | 14,264 (5%) |
 | Train/val loss | Converged close together (~67.2 vs ~67.5) — no overfitting signal |
 | Reconstruction error percentiles | p50: 0.0436 · p90: 0.0870 · p95: 0.1056 |
-| AUROC (vs. Isolation Forest as a weak proxy label) | 0.7185 |
-| VAE / Isolation Forest agreement | 94.7% |
+| Flagged-set overlap with Isolation Forest (both flag top 5%) | 6,636 of 14,264 (46.5%) · Cohen's kappa 0.44 |
+| VAE / Isolation Forest raw agreement | 94.7% (chance level is about 90.5%, so kappa is the fair number) |
 
-**Caveat on these numbers:** there's no ground-truth fraud label for SEC filings, so AUROC is measured against Isolation Forest's flags as a proxy, not verified fraud — a consistency check between two unsupervised methods, not a precision/recall claim.
+**Caveat on these numbers:** there's no ground-truth fraud label for SEC filings, so the only check is agreement with Isolation Forest's flags, not verified fraud — a consistency check between two unsupervised methods, not a precision/recall or AUROC claim.
 
 
 
@@ -200,7 +200,7 @@ nearest-by-embedding.
 ## Known Limitations
 
 - **No labeled fraud ground truth.** The VAE flags statistical deviation from normal patterns, not confirmed fraud — a HIGH score means "unusual," not "fraudulent." There's no dataset of confirmed SEC fraud cases to validate detection accuracy against.
-- **Moderate AUROC (0.7185)** against a proxy Isolation Forest baseline, not a true fraud label — disclosed here rather than hidden, since it's a realistic number for an unsupervised approach on this kind of data.
+- **Only moderate agreement with a proxy baseline** (kappa 0.44 vs Isolation Forest, not a true fraud label). An earlier AUROC figure was computed on binary flags, so it was removed.
 - **Not horizontally scalable as-is.** The cache and knowledge graph are in-memory and per-process — they reset on restart and aren't shared across multiple server instances. Fine for a single-process portfolio deployment; would need Redis + a real graph database for multi-instance production use.
 - **First-request latency.** The CrossEncoder reranker and BM25 index both build/download on first use, adding a few seconds to the very first investigation after startup. Subsequent requests are fast.
 - **Peer discovery depends on SEC's full-text search matching well.** `compare_to_peers` finds companies in the same industry (SIC code) that also mention the relevant financial term — it can occasionally miss true peers or surface a loose match if the search term is too generic.
@@ -265,7 +265,7 @@ Each tool called directly, independent of agent decision-making:
 
 | Metric | Value |
 |---|---|
-| Model AUROC (vs. Isolation Forest proxy baseline) | 0.7185 |
+| VAE vs Isolation Forest flagged-set overlap | 46.5% (kappa 0.44) |
 | Training sequences | 285,275 (80/20 train/val split) |
 | Records in ChromaDB (historical cases corpus) | 5,000 |
 | SEC API calls per investigation | 1, cached (down from 5 pre-caching) |
@@ -284,7 +284,7 @@ Each tool called directly, independent of agent decision-making:
 | Test suite runtime | ~7-30s (varies with cold-start model loading) |
 | CI | Runs full suite on every push via GitHub Actions |
 
-**Note:** there is no precision/recall/F1 reported here, because there's no labeled ground-truth fraud dataset to compute them against (see Known Limitations) — AUROC against a proxy baseline is the honest number available for this kind of unsupervised problem.
+**Note:** there is no precision/recall/F1 reported here, because there's no labeled ground-truth fraud dataset to compute them against (see Known Limitations) — agreement with a proxy baseline is the only check available for this kind of unsupervised problem.
 
 
 ## Engineering Challenges & How They Were Solved
