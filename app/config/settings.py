@@ -1,4 +1,5 @@
 import os
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -15,6 +16,12 @@ class Settings(BaseSettings):
     # Groq deprecated llama-3.3-70b-versatile on 2026-06-17; this makes
     # future model swaps a one-line .env change instead of a code hunt.
     groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+    @field_validator("groq_model", mode="before")
+    @classmethod
+    def _blank_model_uses_default(cls, v):
+        # A blank GROQ_MODEL= line (as in .env.example) must not override the default.
+        return v if v and str(v).strip() else "openai/gpt-oss-120b"
 
     class Config:
         env_file = ".env"
