@@ -134,7 +134,7 @@ Being upfront about these rather than glossing over them, because they're the ki
 | Caching | In-memory TTL cache (SEC API calls) |
 | Database | SQLite |
 | Frontend | Streamlit |
-| Testing | pytest (51 tests — unit, integration, regression) |
+| Testing | pytest (50+ tests — unit, integration, regression) |
 | Containerization | Docker |
 | CI/CD | GitHub Actions (runs full test suite on every push) |
 | Config | pydantic-settings + `.env` |
@@ -159,7 +159,7 @@ financial-anomaly-detection/
 │       ├── advanced_retrieval.py   # metadata filter + hybrid search + rerank
 │       ├── graph_rag.py            # in-memory knowledge graph, multi-hop
 │       └── rag_agent.py            # tool-calling agent (6 tools) + retrieval
-├── tests/                          # 51 tests: unit, integration, regression
+├── tests/                          # 50+ tests: unit, integration, regression
 │   ├── conftest.py
 │   ├── _stubs/                     # lightweight fallbacks if heavy deps absent
 │   └── test_*.py
@@ -194,7 +194,7 @@ nearest-by-embedding.
 
 **Evaluated on real data, not synthetic tests.** 22 real public and small-cap companies run end-to-end through the live agent — real SEC EDGAR calls, real Groq inference — plus a separate direct-tool exercise proving all 8 tools work independently of whether the agent chose to call them on a given input.
 
-**Production-adjacent engineering, not just a notebook.** 51 automated tests running in CI on every push, pinned dependencies, API auth and rate limiting, response caching, and a working frontend — the difference between a research prototype and something built to actually be deployed and maintained.
+**Production-adjacent engineering, not just a notebook.** 50+ automated tests running in CI on every push, pinned dependencies, API auth and rate limiting, response caching, and a working frontend — the difference between a research prototype and something built to actually be deployed and maintained.
 
 
 ## Known Limitations
@@ -269,7 +269,7 @@ Each tool called directly, independent of agent decision-making:
 | Training sequences | 285,275 (80/20 train/val split) |
 | Records in ChromaDB (historical cases corpus) | 5,000 |
 | SEC API calls per investigation | 1, cached (down from 5 pre-caching) |
-| Automated test suite | 51 tests, run on every push via CI |
+| Automated test suite | 50+ tests, run on every push via CI |
 
 *Reproducible via `eval_harness.py` in the repo root.*
 
@@ -280,7 +280,7 @@ Each tool called directly, independent of agent decision-making:
 | Metric | Value |
 |---|---|
 | SEC API calls per company investigation | 1, cached — down from 5 (one per metric) before caching was added |
-| Test suite size | 51 tests |
+| Test suite size | 50+ tests |
 | Test suite runtime | ~7-30s (varies with cold-start model loading) |
 | CI | Runs full suite on every push via GitHub Actions |
 
