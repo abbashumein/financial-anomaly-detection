@@ -26,7 +26,7 @@ from app.services import peer_comparison
 from app.services import advanced_retrieval
 from app.services import graph_rag
 
-MAX_AGENT_STEPS = 6
+MAX_AGENT_STEPS = 10
 
 # ---------- retrieval store (unchanged) ----------
 
