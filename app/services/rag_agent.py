@@ -27,6 +27,8 @@ from app.services import advanced_retrieval
 from app.services import graph_rag
 
 MAX_AGENT_STEPS = 10
+SCORE_DISCLAIMER = ("This score reflects statistical deviation from training patterns "
+                    "over the last ~6 quarters, not confirmed fraud or manipulation.")
 
 # ---------- retrieval store (unchanged) ----------
 
@@ -575,6 +577,11 @@ Rules:
   evidence before concluding.
 - Call conclude as soon as you have enough evidence. Don't call tools
   you don't need.
+- Never allege fraud, manipulation or wrongdoing. The score measures
+  statistical deviation only; say 'unusual' and 'warrants review'.
+- The score covers only the most recent ~6 quarters. If your evidence
+  comes from outside that window (older history), say so explicitly
+  instead of implying it caused the score.
 """
 
 
@@ -618,6 +625,7 @@ def analyze_company(company_id: str, tag: str, ticker: str = None) -> dict:
                 final_report = (
                     f"[{args.get('risk_level', 'UNKNOWN')} RISK] {company_id} | Metric: {tag}\n\n"
                     f"FINDING: {args.get('finding', '')}\n\n"
+                    f"NOTE: {SCORE_DISCLAIMER}\n\n"
                     f"AGENT TRACE: {' -> '.join(trace) or 'none'}"
                 )
                 return {
