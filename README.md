@@ -134,7 +134,7 @@ Being upfront about these rather than glossing over them, because they're the ki
 | Caching | In-memory TTL cache (SEC API calls) |
 | Database | SQLite |
 | Frontend | Streamlit |
-| Testing | pytest (39 tests — unit, integration, regression) |
+| Testing | pytest (51 tests — unit, integration, regression) |
 | Containerization | Docker |
 | CI/CD | GitHub Actions (runs full test suite on every push) |
 | Config | pydantic-settings + `.env` |
@@ -159,7 +159,7 @@ financial-anomaly-detection/
 │       ├── advanced_retrieval.py   # metadata filter + hybrid search + rerank
 │       ├── graph_rag.py            # in-memory knowledge graph, multi-hop
 │       └── rag_agent.py            # tool-calling agent (6 tools) + retrieval
-├── tests/                          # 39 tests: unit, integration, regression
+├── tests/                          # 51 tests: unit, integration, regression
 │   ├── conftest.py
 │   ├── _stubs/                     # lightweight fallbacks if heavy deps absent
 │   └── test_*.py
@@ -194,7 +194,7 @@ nearest-by-embedding.
 
 **Evaluated on real data, not synthetic tests.** 22 real public and small-cap companies run end-to-end through the live agent — real SEC EDGAR calls, real Groq inference — plus a separate direct-tool exercise proving all 8 tools work independently of whether the agent chose to call them on a given input.
 
-**Production-adjacent engineering, not just a notebook.** 39 automated tests running in CI on every push, pinned dependencies, API auth and rate limiting, response caching, and a working frontend — the difference between a research prototype and something built to actually be deployed and maintained.
+**Production-adjacent engineering, not just a notebook.** 51 automated tests running in CI on every push, pinned dependencies, API auth and rate limiting, response caching, and a working frontend — the difference between a research prototype and something built to actually be deployed and maintained.
 
 
 ## Known Limitations
@@ -204,7 +204,7 @@ nearest-by-embedding.
 - **Not horizontally scalable as-is.** The cache and knowledge graph are in-memory and per-process — they reset on restart and aren't shared across multiple server instances. Fine for a single-process portfolio deployment; would need Redis + a real graph database for multi-instance production use.
 - **First-request latency.** The CrossEncoder reranker and BM25 index both build/download on first use, adding a few seconds to the very first investigation after startup. Subsequent requests are fast.
 - **Peer discovery depends on SEC's full-text search matching well.** `compare_to_peers` finds companies in the same industry (SIC code) that also mention the relevant financial term — it can occasionally miss true peers or surface a loose match if the search term is too generic.
-- **Single shared API key, no per-user accounts.** Auth is a single `X-API-Key` check, appropriate for a portfolio demo but not multi-tenant production use.
+- **Single shared API key, no per-user accounts.** Auth is a single `X-API-Key` check, appropriate for a portfolio demo but not multi-tenant production use. It fails closed: if `API_KEY` is unset the server returns 503 (`ALLOW_NO_AUTH=true` skips auth for local dev only).
 - **SQLite, not a production database.** Fine for single-instance prediction logging; would need Postgres or similar under real concurrent write load.
 - **Free-tier Groq rate limits apply.** Heavy usage could hit Groq's free-tier request limits; there's no fallback LLM provider configured.
 - **Investigation latency.** A full multi-tool investigation (score → rank → filing search → peers → trend → graph) can take 10-30+ seconds depending on how many tools the agent chooses to call — there's no streaming response yet.
@@ -269,7 +269,7 @@ Each tool called directly, independent of agent decision-making:
 | Training sequences | 285,275 (80/20 train/val split) |
 | Records in ChromaDB (historical cases corpus) | 5,000 |
 | SEC API calls per investigation | 1, cached (down from 5 pre-caching) |
-| Automated test suite | 39 tests, run on every push via CI |
+| Automated test suite | 51 tests, run on every push via CI |
 
 *Reproducible via `eval_harness.py` in the repo root.*
 
@@ -280,7 +280,7 @@ Each tool called directly, independent of agent decision-making:
 | Metric | Value |
 |---|---|
 | SEC API calls per company investigation | 1, cached — down from 5 (one per metric) before caching was added |
-| Test suite size | 39 tests |
+| Test suite size | 51 tests |
 | Test suite runtime | ~7-30s (varies with cold-start model loading) |
 | CI | Runs full suite on every push via GitHub Actions |
 
