@@ -27,8 +27,8 @@ with st.sidebar:
     st.markdown(
         "- **Model**: VAE trained on 285k+ real financial sequences\n"
         "- **Data**: Live SEC EDGAR `companyfacts` API\n"
-        "- **Agent**: Groq-hosted LLaMA, tool-calling loop\n"
-        "- **Tools**: score, rank anomalous metrics, retrieve similar cases"
+        "- **Agent**: Groq-hosted LLM, tool-calling loop\n"
+        "- **Tools**: 8, incl. scoring, peer comparison, trend, filing search, similar cases, graph"
     )
     st.subheader("Cache")
     stats = cache_stats()
@@ -50,7 +50,9 @@ if st.button("Run investigation", type="primary"):
         try:
             result = analyze_company(company_id, tag, ticker or None)
         except Exception as e:
-            st.error(f"Investigation failed: {e}")
+            import logging
+            logging.getLogger(__name__).exception("Investigation failed")
+            st.error("Investigation failed. See the terminal log for details.")
             st.stop()
 
     risk = result.get("risk_level", "UNKNOWN")
